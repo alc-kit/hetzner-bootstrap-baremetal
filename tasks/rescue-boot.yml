@@ -1,0 +1,93 @@
+---
+# Activate Hetzner rescue mode for the target server, hardware-reset it, and
+# wait until the rescue system answers SSH.
+#
+# Idempotency: community.hrobot.boot is safe to call repeatedly — it returns
+# changed=false if the rescue is already configured for this key.  The reset,
+# by nature, is NOT idempotent — we guard it with a check on the running
+# system below.
+
+- name: "Query current boot config"
+  community.hrobot.server_info:
+    hetzner_user: "{{ hetzner_robot_user }}"
+    hetzner_password: "{{ hetzner_robot_password }}"
+    server_number: "{{ hetzner_server_number }}"
+  register: _server_info
+  delegate_to: localhost
+  no_log: true
+
+- name: "Detect if installed system is already up (skips reset if so AND not forced)"
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host | default(inventory_hostname) }}"
+    port: 22
+    timeout: 10
+    state: started
+  register: _installed_probe
+  failed_when: false
+  changed_when: false
+  delegate_to: localhost
+
+- name: "Bail out if host already responds and force is not set"
+  ansible.builtin.fail:
+    msg: >-
+      Host {{ ansible_host | default(inventory_hostname) }} is already
+      reachable on port 22.  Refusing to reinstall.  Set
+      hetzner_bootstrap_force_reinstall: true to override.
+  when:
+    - _installed_probe is succeeded
+    - _installed_probe.state | default('') == 'started'
+    - not hetzner_bootstrap_force_reinstall | bool
+
+- name: "Activate rescue mode in Robot"
+  community.hrobot.boot:
+    hetzner_user: "{{ hetzner_robot_user }}"
+    hetzner_password: "{{ hetzner_robot_password }}"
+    server_number: "{{ hetzner_server_number }}"
+    rescue:
+      os: linux
+      authorized_keys:
+        - "{{ hetzner_bootstrap_ssh_key_fingerprint }}"
+  delegate_to: localhost
+  no_log: true
+
+- name: "Hardware reset to boot into rescue"
+  community.hrobot.reset:
+    hetzner_user: "{{ hetzner_robot_user }}"
+    hetzner_password: "{{ hetzner_robot_password }}"
+    server_number: "{{ hetzner_server_number }}"
+    reset_type: "{{ hetzner_bootstrap_reset_type }}"
+  delegate_to: localhost
+  no_log: true
+
+# After the reset the host gets a fresh, unknown SSH key.  Drop any prior
+# fingerprint from the local known_hosts so the next connection negotiates
+# anew.  StrictHostKeyChecking=accept-new is set in ansible_ssh_common_args
+# (recommended override in the consuming inventory).
+- name: "Clear stale host key from local known_hosts"
+  ansible.builtin.known_hosts:
+    name: "{{ ansible_host | default(inventory_hostname) }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+
+- name: "Wait for rescue SSH to respond"
+  ansible.builtin.wait_for_connection:
+    delay: 45
+    sleep: 10
+    timeout: "{{ hetzner_bootstrap_rescue_wait_seconds }}"
+
+- name: "Gather facts (rescue should report itself as 'rescue' kernel)"
+  ansible.builtin.setup:
+    gather_subset:
+      - kernel
+      - distribution
+
+- name: "Sanity-check we are actually in the rescue, not the installed OS"
+  ansible.builtin.assert:
+    that:
+      - "'rescue' in (ansible_kernel | lower) or
+         ansible_distribution | lower in ['archlinux', 'rescue']"
+    fail_msg: >-
+      Connected host does not look like the Hetzner rescue system
+      (kernel={{ ansible_kernel }}, distro={{ ansible_distribution }}).
+      Aborting to avoid wiping a live system.

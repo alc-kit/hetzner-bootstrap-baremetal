@@ -1,0 +1,7 @@
+**/.*.swp
+**/*.retry
+**/ansible.log
+.ansible/
+.vscode/
+*.pyc
+__pycache__/

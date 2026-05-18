@@ -1,0 +1,18 @@
+---
+# Project-wide ansible-lint config.
+# Run locally with:  ansible-lint
+exclude_paths:
+  - .github/
+  - .ansible/
+  - playbooks/   # example playbook is illustrative; consumers run it from
+                 # their own project where the role is installed via galaxy.
+
+# These are intentional in this role:
+skip_list:
+  - role-name           # the directory is hetzner-bootstrap-baremetal but
+                        # role_name in meta is hetzner_bootstrap_baremetal,
+                        # which lint complains about.  The galaxy-compatible
+                        # role_name is what consumers reference.
+  - var-naming[no-role-prefix]  # installimage_* vars are intentionally bare;
+                                # they map directly to installimage config
+                                # directives and are not role-internal.

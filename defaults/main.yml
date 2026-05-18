@@ -1,0 +1,125 @@
+---
+# ============================================================================
+# hetzner-bootstrap-baremetal role defaults
+# ============================================================================
+# Variables without a default value are REQUIRED and must be supplied via
+# inventory (group_vars/host_vars).  Variables with a default are optional;
+# the values below are sensible starting points but should be reviewed per
+# customer/fleet.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Hetzner Robot credentials  (REQUIRED — keep these vaulted)
+# ----------------------------------------------------------------------------
+# Generate a Webservice user in the Robot UI:
+#   Settings -> Web service and app settings
+# These vars are consumed by every community.hrobot.* call this role makes.
+#
+# hetzner_robot_user: ""
+# hetzner_robot_password: ""
+
+# ----------------------------------------------------------------------------
+# Per-server identification  (REQUIRED — usually in host_vars)
+# ----------------------------------------------------------------------------
+# Numeric server ID shown in the Robot UI (NOT the IP, NOT the server name).
+#
+# hetzner_server_number: 0
+
+# ----------------------------------------------------------------------------
+# SSH key used to log into the rescue and the installed system
+# ----------------------------------------------------------------------------
+# The role:
+#   1. Registers this key with Robot (idempotent) via community.hrobot.ssh_key
+#   2. Tells community.hrobot.boot to authorize this key for the rescue
+#   3. Includes it in the installimage config so the installed system also
+#      accepts it for root login
+#
+# Override per-host or per-customer if you keep separate keys.
+hetzner_bootstrap_ssh_public_key_path: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25519.pub"
+
+# Name used when registering the key with Robot (kept stable across runs).
+hetzner_bootstrap_ssh_key_robot_name: "hetzner-bootstrap-{{ inventory_hostname }}"
+
+# ----------------------------------------------------------------------------
+# OS image selection
+# ----------------------------------------------------------------------------
+# Image must exist under /root/.oldroot/nfs/images/ in the rescue system.
+# Browse available images with:  ls /root/.oldroot/nfs/images/  (in the rescue)
+#
+# We support only the latest Debian release.  Override if you have a strong
+# reason to pin an older image, but understand support is best-effort.
+hetzner_bootstrap_image: "Debian-1300-trixie-64-minimal.tar.gz"
+
+# ----------------------------------------------------------------------------
+# Disk selection  (REQUIRED — usually in host_vars)
+# ----------------------------------------------------------------------------
+# List the device names (without /dev/ prefix) you want installimage to use
+# for the OS install.  Disks NOT listed here are completely untouched by
+# installimage and remain available for downstream roles (e.g., a data ZFS
+# pool, a clevis-encrypted LUKS volume, etc.).
+#
+# On first deploy, run the playbook with `--tags discover` to dump the disk
+# inventory in the rescue, then populate this list in host_vars.
+#
+# Examples:
+#   installimage_os_disks: [nvme0n1, nvme1n1]      # AX52 / AX102 NVMe pair
+#   installimage_os_disks: [sda, sdb]              # legacy SATA SSDs
+#   installimage_os_disks: [nvme0n1]               # single disk, no RAID
+#
+# installimage_os_disks: []
+
+# ----------------------------------------------------------------------------
+# SWRAID — software RAID across the OS disks
+# ----------------------------------------------------------------------------
+# Set installimage_swraid: 0 to disable RAID (single-disk installs).
+# Auto-disabled if only one OS disk is configured.
+installimage_swraid: 1
+installimage_swraid_level: 1   # 0|1|5|6|10  (only relevant when swraid=1)
+
+# ----------------------------------------------------------------------------
+# Partition layout
+# ----------------------------------------------------------------------------
+# Each entry becomes a PART line in the installimage config.
+#   mount: target mount point or "swap" or "lvm"
+#   fs:    filesystem: ext2|ext3|ext4|xfs|btrfs|swap|reiserfs
+#   size:  M/G/T suffix, or "all" to consume remaining space
+#
+# Keep at least /, /boot (or /boot/efi), and swap.  LVM is supported by
+# adding entries of the form { mount: lvm, fs: vg0, size: all }; see
+# Hetzner's installimage docs for the exact LV/PV syntax.
+installimage_partitions:
+  - { mount: "/boot", fs: "ext4", size: "1G" }
+  - { mount: "swap", fs: "swap", size: "32G" }
+  - { mount: "/", fs: "ext4", size: "all" }
+
+# ----------------------------------------------------------------------------
+# Hostname & bootloader
+# ----------------------------------------------------------------------------
+installimage_hostname: "{{ inventory_hostname_short | default(inventory_hostname) }}"
+installimage_bootloader: grub
+
+# ----------------------------------------------------------------------------
+# Optional: a post-install script that installimage runs after the new system
+# is laid down (chrooted into the installed root).  Absolute path on the
+# rescue filesystem.  Leave undefined to skip.
+# ----------------------------------------------------------------------------
+# installimage_post_install_script: /tmp/post-install.sh
+
+# ----------------------------------------------------------------------------
+# Behavior flags
+# ----------------------------------------------------------------------------
+# If true, run installimage even when the host appears to already be
+# installed (i.e., responds on SSH with a non-rescue kernel).  Use only when
+# intentionally wiping a server.
+hetzner_bootstrap_force_reinstall: false
+
+# Reset type sent to the Robot API to reboot into rescue.
+# Options: "hardware" (recommended), "power", "manual", "software".
+hetzner_bootstrap_reset_type: hardware
+
+# ----------------------------------------------------------------------------
+# Timeouts (seconds)
+# ----------------------------------------------------------------------------
+hetzner_bootstrap_rescue_wait_seconds: 600
+hetzner_bootstrap_installimage_timeout_seconds: 1800
+hetzner_bootstrap_installed_wait_seconds: 600

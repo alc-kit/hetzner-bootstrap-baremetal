@@ -1,0 +1,39 @@
+---
+# Example: bootstrap a Hetzner bare-metal server end-to-end.
+#
+# Inventory shape expected (see README for the full layout):
+#
+#   inventory/hosts.yml:
+#     all:
+#       children:
+#         hetzner_baremetal:
+#           hosts:
+#             my-node-01:
+#               ansible_host: 1.2.3.4
+#               hetzner_server_number: 1234567
+#               installimage_os_disks: [nvme0n1, nvme1n1]
+#
+#   group_vars/hetzner_baremetal/vault.yml  (ansible-vault):
+#     hetzner_robot_user:     "..."
+#     hetzner_robot_password: "..."
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/example-bootstrap.yml \
+#     --ask-vault-pass --limit my-node-01
+#
+# To only enumerate disks without provisioning (useful on first deploy to
+# populate installimage_os_disks for a new server):
+#   ansible-playbook ... --tags discover
+#
+# To force a reinstall of a server that is currently up:
+#   ansible-playbook ... -e hetzner_bootstrap_force_reinstall=true
+
+- name: "Bootstrap Hetzner bare-metal server(s)"
+  hosts: hetzner_baremetal
+  become: true
+  gather_facts: false   # the host may not be reachable yet at play start
+  vars:
+    ansible_ssh_common_args: "-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null"
+    ansible_user: root
+  roles:
+    - role: hetzner_bootstrap_baremetal

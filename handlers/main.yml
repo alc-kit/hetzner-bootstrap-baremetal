@@ -1,0 +1,4 @@
+---
+# Currently no handlers — the role runs forward-only and triggers reboots
+# inline as ordinary tasks rather than via handler notification.  Kept as a
+# stub so consumers can wire handlers in without editing role structure.

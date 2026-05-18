@@ -1,0 +1,27 @@
+---
+galaxy_info:
+  role_name: hetzner_bootstrap_baremetal
+  author: kvalitetsit
+  description: >
+    Provision a fresh OS onto a Hetzner dedicated (bare-metal) server.
+    Drives the rescue system via the Robot API, runs Hetzner's installimage,
+    and hands the host back ready for downstream configuration playbooks.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - trixie
+  galaxy_tags:
+    - hetzner
+    - baremetal
+    - bootstrap
+    - installimage
+    - robot
+    - provisioning
+
+# Collection dependency: community.hrobot supplies the Robot API modules
+# (boot, reset, ssh_key, server_info).  Declared in requirements.yml on the
+# consuming repo; not listed here because role metadata only accepts role
+# dependencies, not collections.
+dependencies: []

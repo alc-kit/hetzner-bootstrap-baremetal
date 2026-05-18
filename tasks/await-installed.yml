@@ -1,0 +1,44 @@
+---
+# After installimage's reboot, the host comes up on the same IP but with
+# fresh SSH host keys.  Re-fingerprint and re-gather facts so subsequent
+# roles run against accurate inventory data.
+
+- name: "Drop rescue host key from local known_hosts"
+  ansible.builtin.known_hosts:
+    name: "{{ ansible_host | default(inventory_hostname) }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+
+- name: "Reset gathered facts (the rescue's facts are now stale)"
+  ansible.builtin.meta: clear_facts
+
+- name: "Wait for the installed system's SSH"
+  ansible.builtin.wait_for_connection:
+    delay: 30
+    sleep: 10
+    timeout: "{{ hetzner_bootstrap_installed_wait_seconds }}"
+
+- name: "Re-gather facts on the installed system"
+  ansible.builtin.setup:
+
+- name: "Confirm we are no longer in the rescue"
+  ansible.builtin.assert:
+    that:
+      - "'rescue' not in (ansible_kernel | lower)"
+      - ansible_distribution | lower == 'debian'
+    fail_msg: >-
+      Post-reboot host does not look like installed Debian
+      (kernel={{ ansible_kernel }}, distro={{ ansible_distribution }}).
+      installimage may have failed silently or the wrong image was selected.
+
+- name: "Summary"
+  ansible.builtin.debug:
+    msg: |
+      Bootstrap complete.
+        Hostname:     {{ ansible_hostname }}
+        Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}
+        Kernel:       {{ ansible_kernel }}
+        OS disks:     {{ installimage_os_disks }}
+        Data disks:   {{ hetzner_bootstrap_data_disks | default([]) }}
+      Ready for downstream configuration roles.

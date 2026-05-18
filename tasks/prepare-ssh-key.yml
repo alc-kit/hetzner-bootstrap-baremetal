@@ -1,0 +1,32 @@
+---
+# Ensure the operator's SSH public key is deposited in Robot.  The fingerprint
+# is what community.hrobot.boot uses to authorize the rescue login.
+#
+# community.hrobot.ssh_key is idempotent: state=present is a no-op if a key
+# with the same content already exists, regardless of the chosen name.
+
+- name: "Read public key from disk"
+  ansible.builtin.slurp:
+    src: "{{ hetzner_bootstrap_ssh_public_key_path }}"
+  register: _ssh_pubkey_raw
+  delegate_to: localhost
+  run_once: true
+
+- name: "Decode public key"
+  ansible.builtin.set_fact:
+    hetzner_bootstrap_ssh_public_key: "{{ _ssh_pubkey_raw.content | b64decode | trim }}"
+
+- name: "Register key with Robot (idempotent)"
+  community.hrobot.ssh_key:
+    hetzner_user: "{{ hetzner_robot_user }}"
+    hetzner_password: "{{ hetzner_robot_password }}"
+    name: "{{ hetzner_bootstrap_ssh_key_robot_name }}"
+    public_key: "{{ hetzner_bootstrap_ssh_public_key }}"
+    state: present
+  register: _robot_ssh_key
+  delegate_to: localhost
+  no_log: true
+
+- name: "Record fingerprint for later modules"
+  ansible.builtin.set_fact:
+    hetzner_bootstrap_ssh_key_fingerprint: "{{ _robot_ssh_key.fingerprint }}"

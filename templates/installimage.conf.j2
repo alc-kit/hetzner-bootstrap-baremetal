@@ -1,0 +1,43 @@
+## ============================================================================
+## installimage configuration  --  rendered by hetzner-bootstrap-baremetal
+## host:   {{ inventory_hostname }}
+## time:   {{ ansible_date_time.iso8601 | default('?') }}
+## ============================================================================
+##
+## installimage only touches disks listed as DRIVE<N> below.  All other
+## block devices visible to the rescue system are left untouched and remain
+## available for downstream roles.
+##
+
+HOSTNAME {{ installimage_hostname }}
+
+{% for disk in installimage_os_disks %}
+DRIVE{{ loop.index }} /dev/{{ disk }}
+{% endfor %}
+
+{% if (installimage_swraid | int) == 1 and (installimage_os_disks | length) > 1 %}
+SWRAID 1
+SWRAIDLEVEL {{ installimage_swraid_level }}
+{% else %}
+SWRAID 0
+{% endif %}
+
+BOOTLOADER {{ installimage_bootloader }}
+
+IMAGE /root/.oldroot/nfs/install/../images/{{ hetzner_bootstrap_image }}
+
+{% for part in installimage_partitions %}
+PART {{ part.mount }} {{ part.fs }} {{ part.size }}
+{% endfor %}
+
+{% if installimage_post_install_script is defined and installimage_post_install_script | length > 0 %}
+POST_INSTALL_SCRIPT {{ installimage_post_install_script }}
+{% endif %}
+
+## ----------------------------------------------------------------------------
+## Disks intentionally NOT included as DRIVE<N> (left pristine for
+## downstream roles such as data-pool creation, LUKS provisioning, etc.):
+{% for disk in hetzner_bootstrap_data_disks | default([]) %}
+##   /dev/{{ disk }}
+{% endfor %}
+## ----------------------------------------------------------------------------

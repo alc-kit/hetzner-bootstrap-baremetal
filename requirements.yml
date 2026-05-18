@@ -1,0 +1,7 @@
+---
+# Collection dependency for this role.  Consumers must install this in their
+# own project; Ansible Galaxy does not resolve collection deps from roles
+# automatically.
+collections:
+  - name: community.hrobot
+    version: ">=2.0.0"

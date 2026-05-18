@@ -1,0 +1,65 @@
+---
+# Render the installimage config and run it.
+#
+# installimage writes to /root/debug.txt and /installimage.debug as it runs;
+# we surface the final lines on failure to make debugging tractable.
+# The installer itself can take 5-15 minutes depending on disk speed and
+# whether SWRAID resync is started, so we run it async and poll.
+
+- name: "Render configuration"
+  ansible.builtin.template:
+    src: installimage.conf.j2
+    dest: /autosetup
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: "Dump rendered config to log (for the operator)"
+  ansible.builtin.command:
+    cmd: cat /autosetup
+  register: _rendered_config
+  changed_when: false
+
+- name: "Echo rendered config"
+  ansible.builtin.debug:
+    var: _rendered_config.stdout_lines
+
+- name: "Run the installer (async, this takes 5-15 min)"
+  ansible.builtin.command:
+    cmd: /root/.oldroot/nfs/install/installimage -a -c /autosetup
+  async: "{{ hetzner_bootstrap_installimage_timeout_seconds }}"
+  poll: 0
+  register: _installimage_job
+  changed_when: true
+
+- name: "Wait for installer to finish"
+  ansible.builtin.async_status:
+    jid: "{{ _installimage_job.ansible_job_id }}"
+  register: _installimage_result
+  until: _installimage_result.finished
+  retries: "{{ (hetzner_bootstrap_installimage_timeout_seconds // 30) | int }}"
+  delay: 30
+
+- name: "Surface debug log on failure"
+  when: (_installimage_result.rc | default(1)) != 0
+  block:
+    - name: "Tail debug log"
+      ansible.builtin.command:
+        cmd: tail -200 /root/debug.txt
+      register: _debug_tail
+      changed_when: false
+      failed_when: false
+
+    - name: "Fail with debug context"
+      ansible.builtin.fail:
+        msg: |
+          installimage exited rc={{ _installimage_result.rc | default('?') }}.
+          Last 200 lines of /root/debug.txt:
+          {{ _debug_tail.stdout }}
+
+- name: "Reboot into the freshly-installed OS"
+  ansible.builtin.reboot:
+    reboot_timeout: "{{ hetzner_bootstrap_installed_wait_seconds }}"
+    pre_reboot_delay: 5
+    post_reboot_delay: 15
+    msg: "hetzner-bootstrap: rebooting into installed system"

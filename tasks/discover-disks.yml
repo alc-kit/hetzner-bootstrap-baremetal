@@ -1,0 +1,60 @@
+---
+# Enumerate disks in the rescue and validate the operator's selection.
+# Disks not listed in installimage_os_disks are computed into
+# hetzner_bootstrap_data_disks and exposed as a fact so downstream playbooks
+# (e.g., a data-pool creation role) can consume the same selection.
+
+- name: "Enumerate block devices"
+  ansible.builtin.command:
+    cmd: lsblk -dnpJ -o NAME,SIZE,TYPE,MODEL,SERIAL,ROTA
+  register: _lsblk
+  changed_when: false
+
+- name: "Parse disk list"
+  ansible.builtin.set_fact:
+    _all_blockdevs: "{{ (_lsblk.stdout | from_json).blockdevices }}"
+
+- name: "Filter to actual disks (excludes loop, rom, etc.)"
+  ansible.builtin.set_fact:
+    hetzner_bootstrap_all_disks: >-
+      {{ _all_blockdevs
+         | selectattr('type', 'eq', 'disk')
+         | list }}
+
+- name: "Render human-readable disk table"
+  ansible.builtin.debug:
+    msg: |
+      Disks visible in rescue system:
+      {% for d in hetzner_bootstrap_all_disks %}
+        {{ d.name | regex_replace('^/dev/', '') | ljust(10) }}
+        {{ d.size | ljust(8) }}
+        {{ 'rotational' if d.rota else 'flash     ' }}
+        {{ d.model | default('?') }}
+        SN={{ d.serial | default('?') }}
+      {% endfor %}
+
+      Configured OS disks: {{ installimage_os_disks }}
+
+- name: "Fail if any configured OS disk is missing on this host"
+  ansible.builtin.fail:
+    msg: >-
+      Disk /dev/{{ item }} listed in installimage_os_disks is not present
+      on this host.  Available disks:
+      {{ hetzner_bootstrap_all_disks | map(attribute='name') | list }}
+  when: ('/dev/' ~ item) not in (hetzner_bootstrap_all_disks | map(attribute='name') | list)
+  loop: "{{ installimage_os_disks }}"
+
+- name: "Compute data disks (unselected = preserved for downstream roles)"
+  ansible.builtin.set_fact:
+    hetzner_bootstrap_data_disks: >-
+      {{ hetzner_bootstrap_all_disks
+         | map(attribute='name')
+         | map('regex_replace', '^/dev/', '')
+         | reject('in', installimage_os_disks)
+         | list }}
+
+- name: "Summarize selection"
+  ansible.builtin.debug:
+    msg: |
+      OS disks (will be wiped by installimage):  {{ installimage_os_disks }}
+      Data disks (left pristine for downstream): {{ hetzner_bootstrap_data_disks }}

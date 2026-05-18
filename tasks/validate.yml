@@ -1,0 +1,45 @@
+---
+# Pre-flight: refuse to call the Robot API if inventory is incomplete.
+# These checks are intentionally local-only (delegate_to: localhost) so they
+# can run before the server is reachable.
+
+- name: "Required inventory variables are set"
+  ansible.builtin.assert:
+    that:
+      - hetzner_robot_user is defined and hetzner_robot_user | length > 0
+      - hetzner_robot_password is defined and hetzner_robot_password | length > 0
+      - hetzner_server_number is defined
+      - (hetzner_server_number | int) > 0
+      - installimage_os_disks is defined
+      - installimage_os_disks | length >= 1
+      - hetzner_bootstrap_image is defined and hetzner_bootstrap_image | length > 0
+    fail_msg: >-
+      Missing required variables.  See README for the minimal host_vars set:
+      hetzner_robot_user, hetzner_robot_password, hetzner_server_number,
+      installimage_os_disks, hetzner_bootstrap_image.
+    success_msg: "Inventory looks complete."
+  delegate_to: localhost
+  run_once: true
+
+- name: "SWRAID configuration is consistent"
+  ansible.builtin.assert:
+    that:
+      - (installimage_swraid | int) == 0 or (installimage_os_disks | length) >= 2
+    fail_msg: >-
+      installimage_swraid is enabled but only one OS disk is configured.
+      Set installimage_swraid: 0 for single-disk installs.
+  delegate_to: localhost
+
+- name: "SSH public key file exists locally"
+  ansible.builtin.stat:
+    path: "{{ hetzner_bootstrap_ssh_public_key_path }}"
+  register: _ssh_key_stat
+  delegate_to: localhost
+
+- name: "Fail if SSH public key file is missing"
+  ansible.builtin.fail:
+    msg: >-
+      Public key not found at {{ hetzner_bootstrap_ssh_public_key_path }}.
+      Override hetzner_bootstrap_ssh_public_key_path or generate a key.
+  when: not _ssh_key_stat.stat.exists
+  delegate_to: localhost

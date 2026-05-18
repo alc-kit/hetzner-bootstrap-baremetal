@@ -1,0 +1,40 @@
+---
+# ============================================================================
+# hetzner-bootstrap-baremetal — entry point
+# ============================================================================
+# Phases (each in its own task file so callers can use tasks_from: to run
+# individual stages):
+#
+#   1. validate            sanity-check inventory vars before touching Robot
+#   2. prepare-ssh-key     read pubkey, register with Robot if missing
+#   3. rescue-boot         set rescue boot, hardware reset, wait for SSH
+#   4. discover-disks      enumerate disks in rescue, validate selection
+#   5. installimage        render config, run installer, reboot
+#   6. await-installed     re-fingerprint, wait for installed SSH
+#
+# Phase boundaries are also tag-addressable; see tags assigned below.
+# ============================================================================
+
+- name: "Validate inventory"
+  ansible.builtin.import_tasks: validate.yml
+  tags: [hetzner_bootstrap, validate]
+
+- name: "Prepare SSH key"
+  ansible.builtin.import_tasks: prepare-ssh-key.yml
+  tags: [hetzner_bootstrap, ssh_key]
+
+- name: "Boot into rescue system"
+  ansible.builtin.import_tasks: rescue-boot.yml
+  tags: [hetzner_bootstrap, rescue]
+
+- name: "Discover and validate disks"
+  ansible.builtin.import_tasks: discover-disks.yml
+  tags: [hetzner_bootstrap, discover, disks]
+
+- name: "Run installimage"
+  ansible.builtin.import_tasks: installimage.yml
+  tags: [hetzner_bootstrap, installimage]
+
+- name: "Wait for installed system"
+  ansible.builtin.import_tasks: await-installed.yml
+  tags: [hetzner_bootstrap, await]
