@@ -51,21 +51,31 @@ hetzner_bootstrap_ssh_key_robot_name: "hetzner-bootstrap-{{ inventory_hostname }
 hetzner_bootstrap_image: "Debian-1300-trixie-64-minimal.tar.gz"
 
 # ----------------------------------------------------------------------------
-# Disk selection  (REQUIRED — usually in host_vars)
+# Disk selection  (REQUIRED — supply exactly ONE of the two vars below)
 # ----------------------------------------------------------------------------
-# List the device names (without /dev/ prefix) you want installimage to use
-# for the OS install.  Disks NOT listed here are completely untouched by
-# installimage and remain available for downstream roles (e.g., a data ZFS
-# pool, a clevis-encrypted LUKS volume, etc.).
+# Pick which disks installimage uses for the OS install.  Disks NOT selected
+# are completely untouched and remain available for downstream roles (a data
+# ZFS pool, a clevis-encrypted LUKS volume, etc.).
 #
-# On first deploy, run the playbook with `--tags discover` to dump the disk
-# inventory in the rescue, then populate this list in host_vars.
+# RECOMMENDED — installimage_os_disk_serials: a list of disk SERIALS (or WWNs).
+# Device names (sda, nvme0n1) can reorder across rescue reboots; serials/WWNs do
+# not.  The role resolves each serial to the CURRENT device name in the rescue,
+# in the same session that runs installimage, so the selection is stable.
+# Order is preserved (drives DRIVE1, DRIVE2, ... numbering).
 #
-# Examples:
+#   installimage_os_disk_serials: ["S6S1NE0R123456", "S6S1NE0R123457"]
+#
+# LEGACY — installimage_os_disks: raw device names (without /dev/).  Simple but
+# fragile across reboots.  Mutually exclusive with installimage_os_disk_serials.
+#
 #   installimage_os_disks: [nvme0n1, nvme1n1]      # AX52 / AX102 NVMe pair
 #   installimage_os_disks: [sda, sdb]              # legacy SATA SSDs
 #   installimage_os_disks: [nvme0n1]               # single disk, no RAID
 #
+# Either way: run `--tags discover` (or the consuming repo's disk-discovery
+# playbook) to dump serials/WWNs/sizes, then populate host_vars.
+#
+# installimage_os_disk_serials: []
 # installimage_os_disks: []
 
 # ----------------------------------------------------------------------------

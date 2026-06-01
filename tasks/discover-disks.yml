@@ -5,8 +5,11 @@
 # (e.g., a data-pool creation role) can consume the same selection.
 
 - name: "Enumerate block devices"
+  # WWN is captured so OS-disk serials can also be matched by WWN — some
+  # devices (e.g. certain NVMe namespaces) report a blank/duplicate SERIAL but
+  # a distinct WWN.
   ansible.builtin.command:
-    cmd: lsblk -dnpJ -o NAME,SIZE,TYPE,MODEL,SERIAL,ROTA
+    cmd: lsblk -dnpJ -o NAME,SIZE,TYPE,MODEL,SERIAL,WWN,ROTA
   register: _lsblk
   changed_when: false
 
@@ -21,6 +24,60 @@
          | selectattr('type', 'eq', 'disk')
          | list }}
 
+# ── Resolve serial-based OS-disk selection (when used) ───────────────────────
+# installimage_os_disk_serials is the stable selector: device names (sda, nvme0n1)
+# can reorder across rescue reboots, serials/WWNs do not.  Resolve each serial to
+# the CURRENT device name here, in the same rescue session that runs installimage.
+# The legacy installimage_os_disks (names) path is left untouched.
+- name: "Resolve OS disks from serials"
+  when: installimage_os_disk_serials | default([]) | length > 0
+  block:
+    - name: "Guard: serials and names are mutually exclusive"
+      # Repeated here because the `--tags 'rescue,discover'` path skips validate.yml.
+      ansible.builtin.assert:
+        that:
+          - installimage_os_disks is not defined or (installimage_os_disks | length) == 0
+        fail_msg: >-
+          Both installimage_os_disk_serials and installimage_os_disks are set.
+          Use exactly one (serials recommended).
+
+    - name: "Match each requested serial to a current device name (serial or WWN)"
+      ansible.builtin.set_fact:
+        _os_resolve: >-
+          {%- set names = [] -%}
+          {%- set bad = [] -%}
+          {%- for want in installimage_os_disk_serials -%}
+            {%- set matched = [] -%}
+            {%- for d in hetzner_bootstrap_all_disks -%}
+              {%- if (d.serial | default('')) == want or (d.wwn | default('')) == want -%}
+                {%- set _ = matched.append(d.name | regex_replace('^/dev/', '')) -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- if (matched | length) == 1 -%}
+              {%- set _ = names.append(matched[0]) -%}
+            {%- else -%}
+              {%- set _ = bad.append({'serial': want, 'matches': matched}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ {'names': names, 'bad': bad} }}
+
+    - name: "Fail if any serial did not match exactly one disk"
+      ansible.builtin.fail:
+        msg: |
+          Could not resolve installimage_os_disk_serials to disks on this host:
+          {% for b in _os_resolve.bad %}
+            - serial '{{ b.serial }}' matched {{ b.matches | length }} disk(s): {{ b.matches }}
+          {% endfor %}
+          Available disks (name / serial / wwn / size):
+          {% for d in hetzner_bootstrap_all_disks %}
+            {{ d.name }}  SN={{ d.serial | default('?') }}  WWN={{ d.wwn | default('?') }}  {{ d.size }}
+          {% endfor %}
+      when: _os_resolve.bad | length > 0
+
+    - name: "Set installimage_os_disks from the resolved serials (operator order preserved)"
+      ansible.builtin.set_fact:
+        installimage_os_disks: "{{ _os_resolve.names }}"
+
 - name: "Render human-readable disk table"
   ansible.builtin.debug:
     msg: |
@@ -31,6 +88,7 @@
         {{ 'rotational' if d.rota else 'flash     ' }}
         {{ d.model | default('?') }}
         SN={{ d.serial | default('?') }}
+        WWN={{ d.wwn | default('?') }}
       {% endfor %}
 
       Configured OS disks: {{ installimage_os_disks }}

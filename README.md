@@ -108,7 +108,7 @@ downstream role can pick up.
 | `hetzner_robot_user` | vault (group/all) | Robot Webservice user |
 | `hetzner_robot_password` | vault (group/all) | Robot Webservice password |
 | `hetzner_server_number` | host_vars | Numeric server ID from the Robot UI |
-| `installimage_os_disks` | host_vars | List of device names (e.g. `[nvme0n1, nvme1n1]`). See [Disk selection](#disk-selection). |
+| OS disks (one of) | host_vars | `installimage_os_disk_serials` (recommended — disk serials/WWNs, stable across reboots) **or** `installimage_os_disks` (raw device names, fragile). Mutually exclusive. See [Disk selection](#disk-selection). |
 
 ## Optional variables
 
@@ -136,6 +136,25 @@ Hetzner bare-metal servers are commonly ordered with mixed storage: e.g.
 2x NVMe for OS + 4x rotational HDD for data. **installimage only touches
 disks listed explicitly as `DRIVE<N>` in its config.** This role lets you
 pick which disks count as "OS" — everything else is left pristine.
+
+### Selecting by serial (recommended) vs by device name
+
+Device names (`sda`, `nvme0n1`) are **not stable across rescue reboots** — the
+kernel can enumerate the same physical disks in a different order, so a committed
+`installimage_os_disks: [sda, sdb]` can point at the wrong disks on a later run.
+Prefer **`installimage_os_disk_serials`**: a list of disk serials (or WWNs). The
+role resolves each to the current device name *in the rescue, in the same session
+that runs installimage*, matching on `SERIAL` or `WWN` (WWN covers disks that
+report a blank/duplicate serial). Order is preserved → `DRIVE1`, `DRIVE2`, ….
+It fails clearly if a serial matches zero or more than one disk.
+
+```yaml
+# host_vars/my-node-01/disks.yml  (recommended)
+installimage_os_disk_serials: ["S6S1NE0R123456", "S6S1NE0R123457"]
+```
+
+`installimage_os_disks` (raw names) still works as a direct/legacy override, but
+the two are **mutually exclusive** — set exactly one.
 
 ### The flow
 

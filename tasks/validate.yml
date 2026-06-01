@@ -10,21 +10,38 @@
       - hetzner_robot_password is defined and hetzner_robot_password | length > 0
       - hetzner_server_number is defined
       - (hetzner_server_number | int) > 0
-      - installimage_os_disks is defined
-      - installimage_os_disks | length >= 1
+      # OS-disk selection: one of installimage_os_disk_serials (recommended,
+      # stable across rescue reboots) or installimage_os_disks (device names).
+      - ((installimage_os_disks | default([])) + (installimage_os_disk_serials | default([]))) | length >= 1
       - hetzner_bootstrap_image is defined and hetzner_bootstrap_image | length > 0
     fail_msg: >-
       Missing required variables.  See README for the minimal host_vars set:
       hetzner_robot_user, hetzner_robot_password, hetzner_server_number,
-      installimage_os_disks, hetzner_bootstrap_image.
+      one of (installimage_os_disk_serials | installimage_os_disks),
+      hetzner_bootstrap_image.
     success_msg: "Inventory looks complete."
+  delegate_to: localhost
+  run_once: true
+
+- name: "OS-disk selection is unambiguous (serials XOR names)"
+  ansible.builtin.assert:
+    that:
+      - not ((installimage_os_disks | default([]) | length > 0) and
+             (installimage_os_disk_serials | default([]) | length > 0))
+    fail_msg: >-
+      Set EITHER installimage_os_disk_serials (recommended — resolved to current
+      device names in the rescue, stable across reboots) OR installimage_os_disks
+      (raw device names) — not both.
   delegate_to: localhost
   run_once: true
 
 - name: "SWRAID configuration is consistent"
   ansible.builtin.assert:
+    # Count from whichever selector is set (serials list is 1:1 with the device
+    # names it resolves to); the XOR assert above guarantees exactly one is set.
     that:
-      - (installimage_swraid | int) == 0 or (installimage_os_disks | length) >= 2
+      - (installimage_swraid | int) == 0 or
+        (((installimage_os_disks | default([])) + (installimage_os_disk_serials | default([]))) | length) >= 2
     fail_msg: >-
       installimage_swraid is enabled but only one OS disk is configured.
       Set installimage_swraid: 0 for single-disk installs.
