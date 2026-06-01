@@ -3,6 +3,23 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.1.3] - 2026-06-01
+
+### Fixed
+- `rescue-boot`: detect the current Hetzner rescue by **hostname** (`rescue`), not
+  only by kernel/distro. The rescue is now Debian-based with a custom kernel (e.g.
+  `kernel=6.12.67`, `distro=Debian`), so the old `'rescue' in kernel` / `archlinux`
+  heuristic mis-classified a genuine rescue as an installed OS and aborted ("does not
+  look like the Hetzner rescue system"). Both the `_in_rescue` reuse check and the
+  final sanity-assert now also accept `ansible_hostname` / `ansible_nodename ==
+  'rescue'` (gathered from the box via the `setup` already run there), keeping the
+  kernel/distro terms as fallback. The change is purely additive (`OR`), so the
+  wipe-gate can only gain *positive* rescue signals, never newly match an installed
+  host; if the fact gather fails the terms are undefined → `''` → safe abort.
+  (`installimage` was evaluated as a marker but is absent from a non-interactive
+  shell's PATH, so it is not used.) Supersedes the v1.1.1 "Arch-based rescue"
+  known-limitation note.
+
 ## [1.1.2] - 2026-06-01
 
 ### Fixed

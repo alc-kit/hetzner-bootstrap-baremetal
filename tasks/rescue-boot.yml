@@ -58,16 +58,26 @@
       ignore_unreachable: true
 
 - name: "Classify whether the responding host is the rescue system"
+  # Gathered (NOT inventory) facts: the identify `setup` above ran `hostname`/
+  # `uname -n` ON the box. The current Hetzner rescue is Debian-based with a custom
+  # kernel and reports hostname 'rescue' (older/Arch-based rescues matched on
+  # kernel/distro — kept as fallback OR terms). NB: installimage is NOT a usable
+  # marker — it is absent from a non-interactive shell's PATH. Only ever OR-in
+  # *positive* rescue signals here; never loosen toward something an installed host
+  # could match (wipe gate). If the gather failed, these are undefined → '' → false.
   ansible.builtin.set_fact:
     _in_rescue: "{{ _host_responds | bool
                     and ('rescue' in (ansible_kernel | default('') | lower)
-                         or (ansible_distribution | default('') | lower) in ['archlinux', 'rescue']) }}"
+                         or (ansible_distribution | default('') | lower) in ['archlinux', 'rescue']
+                         or (ansible_hostname | default('') | lower == 'rescue')
+                         or (ansible_nodename | default('') | lower == 'rescue')) }}"
 
 - name: "Bail out if an INSTALLED system is up and force is not set"
   ansible.builtin.fail:
     msg: >-
       Host {{ ansible_host | default(inventory_hostname) }} appears to run an
-      installed system (kernel={{ ansible_kernel | default('?') }},
+      installed system (hostname={{ ansible_hostname | default('?') }},
+      kernel={{ ansible_kernel | default('?') }},
       distro={{ ansible_distribution | default('?') }}).  Refusing to reinstall.
       Set hetzner_bootstrap_force_reinstall: true to override.
   when:
@@ -122,7 +132,7 @@
         sleep: 10
         timeout: "{{ hetzner_bootstrap_rescue_wait_seconds }}"
 
-    - name: "Gather facts (rescue should report itself as 'rescue' kernel)"
+    - name: "Gather facts (rescue identifies via hostname 'rescue'; Debian-based, custom kernel)"
       ansible.builtin.setup:
         gather_subset:
           - kernel
@@ -131,9 +141,13 @@
 - name: "Sanity-check we are actually in the rescue, not the installed OS"
   ansible.builtin.assert:
     that:
-      - "'rescue' in (ansible_kernel | lower) or
-         ansible_distribution | lower in ['archlinux', 'rescue']"
+      - "'rescue' in (ansible_kernel | default('') | lower)
+         or (ansible_distribution | default('') | lower) in ['archlinux', 'rescue']
+         or (ansible_hostname | default('') | lower == 'rescue')
+         or (ansible_nodename | default('') | lower == 'rescue')"
     fail_msg: >-
       Connected host does not look like the Hetzner rescue system
-      (kernel={{ ansible_kernel }}, distro={{ ansible_distribution }}).
+      (hostname={{ ansible_hostname | default('?') }},
+      kernel={{ ansible_kernel | default('?') }},
+      distro={{ ansible_distribution | default('?') }}).
       Aborting to avoid wiping a live system.
