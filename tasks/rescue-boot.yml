@@ -45,11 +45,15 @@
       become: false
 
     - name: "Gather kernel/distribution from the responding host"
+      # ignore_unreachable so a host with :22 open but not authenticable (e.g. a
+      # foreign OS that does not accept our key) degrades to "kernel undefined ->
+      # not rescue -> bail" rather than aborting the play with an unreachable error.
       ansible.builtin.setup:
         gather_subset:
           - kernel
           - distribution
       failed_when: false
+      ignore_unreachable: true
 
 - name: "Classify whether the responding host is the rescue system"
   ansible.builtin.set_fact:

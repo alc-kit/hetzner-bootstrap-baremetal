@@ -3,6 +3,24 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.1.1] - 2026-06-01
+
+### Fixed
+- `rescue-boot`: the rescue-vs-installed identify step now sets
+  `ignore_unreachable: true`, so a host whose port 22 is open but does not accept
+  our SSH key degrades to a clean "installed → bail" instead of aborting the play
+  with an unreachable error.
+
+### Known limitation
+- `rescue-boot` classifies "already in rescue" from the kernel/distro heuristic
+  (`'rescue'` in kernel, or distro `archlinux`/`rescue` — Hetzner's rescue is
+  Arch-based). A host already running a **non-Debian** OS that matches that
+  heuristic (e.g. an installed Arch box) would be misread as rescue and the
+  boot+reset skipped. This role targets Debian installs only, so an installed
+  host here is Debian (correctly classified "installed" → bail). If you reuse the
+  role against non-Debian installed hosts, pass `hetzner_bootstrap_force_reinstall`
+  deliberately or extend the check with a positive rescue marker.
+
 ## [1.1.0] - 2026-06-01
 
 ### Added
