@@ -11,6 +11,7 @@
   register: _ssh_pubkey_raw
   delegate_to: localhost
   run_once: true
+  become: false
 
 - name: "Decode public key"
   ansible.builtin.set_fact:
@@ -26,6 +27,7 @@
   register: _robot_ssh_key
   delegate_to: localhost
   no_log: true
+  become: false
 
 - name: "Record fingerprint for later modules"
   ansible.builtin.set_fact:

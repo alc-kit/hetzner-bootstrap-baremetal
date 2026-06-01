@@ -3,6 +3,19 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.1.2] - 2026-06-01
+
+### Fixed
+- Localhost-delegated tasks no longer inherit `become`. Tasks that
+  `delegate_to: localhost` — reading the public key (`prepare-ssh-key`), calling
+  the Hetzner Robot API (`prepare-ssh-key`, `rescue-boot`), probing port 22
+  (`rescue-boot`), and stat-ing the key file (`validate`) — inherited the
+  consuming play's `become: true` and were wrapped in `sudo` on the **control
+  node**, failing with `sudo: a password is required` whenever the operator's
+  local sudo is password-protected. None of these tasks need root on the
+  controller, so each now sets `become: false` (matching the `known_hosts` tasks
+  that already did). No effect on the privileged work done over SSH on the target.
+
 ## [1.1.1] - 2026-06-01
 
 ### Fixed

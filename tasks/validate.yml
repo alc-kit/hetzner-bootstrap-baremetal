@@ -52,6 +52,7 @@
     path: "{{ hetzner_bootstrap_ssh_public_key_path }}"
   register: _ssh_key_stat
   delegate_to: localhost
+  become: false
 
 - name: "Fail if SSH public key file is missing"
   ansible.builtin.fail:

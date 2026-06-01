@@ -15,6 +15,7 @@
   register: _server_info
   delegate_to: localhost
   no_log: true
+  become: false
 
 - name: "Probe whether the host already answers SSH on port 22"
   ansible.builtin.wait_for:
@@ -26,6 +27,7 @@
   failed_when: false
   changed_when: false
   delegate_to: localhost
+  become: false
 
 - name: "Record whether the host is currently responding"
   ansible.builtin.set_fact:
@@ -91,6 +93,7 @@
             - "{{ hetzner_bootstrap_ssh_key_fingerprint }}"
       delegate_to: localhost
       no_log: true
+      become: false
 
     - name: "Hardware reset to boot into rescue"
       community.hrobot.reset:
@@ -100,6 +103,7 @@
         reset_type: "{{ hetzner_bootstrap_reset_type }}"
       delegate_to: localhost
       no_log: true
+      become: false
 
     # After the reset the host gets a fresh, unknown SSH key.  Drop any prior
     # fingerprint from local known_hosts so the next connection negotiates anew.
