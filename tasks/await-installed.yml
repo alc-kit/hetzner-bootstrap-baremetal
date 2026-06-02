@@ -25,20 +25,20 @@
 - name: "Confirm we are no longer in the rescue"
   ansible.builtin.assert:
     that:
-      - "'rescue' not in (ansible_kernel | lower)"
-      - ansible_distribution | lower == 'debian'
+      - "'rescue' not in (ansible_facts.kernel | lower)"
+      - ansible_facts.distribution | lower == 'debian'
     fail_msg: >-
       Post-reboot host does not look like installed Debian
-      (kernel={{ ansible_kernel }}, distro={{ ansible_distribution }}).
+      (kernel={{ ansible_facts.kernel }}, distro={{ ansible_facts.distribution }}).
       installimage may have failed silently or the wrong image was selected.
 
 - name: "Summary"
   ansible.builtin.debug:
     msg: |
       Bootstrap complete.
-        Hostname:     {{ ansible_hostname }}
-        Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}
-        Kernel:       {{ ansible_kernel }}
+        Hostname:     {{ ansible_facts.hostname }}
+        Distribution: {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}
+        Kernel:       {{ ansible_facts.kernel }}
         OS disks:     {{ installimage_os_disks | default(installimage_os_disk_serials) | default('(see host_vars)') }}
         Data disks:   {{ hetzner_bootstrap_data_disks | default([]) }}
       Ready for downstream configuration roles.

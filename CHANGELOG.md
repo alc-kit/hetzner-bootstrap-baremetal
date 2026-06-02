@@ -47,6 +47,13 @@ All notable changes to this role are documented here. This role is consumed via
   drift.
 - `hetzner_bootstrap_installimage_config_path` (default `/root/installimage.conf`).
 
+### Changed
+- All gathered-fact references use `ansible_facts.<name>` instead of the
+  top-level `ansible_<name>` vars (e.g. `ansible_facts.kernel`,
+  `ansible_facts.distribution`). Silences the `INJECT_FACTS_AS_VARS` deprecation
+  (top-level fact injection is removed in ansible-core 2.24). Connection/magic
+  vars (`ansible_host`, `ansible_check_mode`, …) are unaffected and unchanged.
+
 ### Notes
 - **Future:** custom/operator-supplied image upload (for non-Proxmox install
   types) is a planned development path; not implemented yet.
