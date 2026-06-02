@@ -53,19 +53,23 @@ hetzner_bootstrap_ssh_key_robot_name: "hetzner-bootstrap-{{ inventory_hostname }
 # Browse what THIS rescue actually has:
 #   ls /root/.oldroot/nfs/images/        (or the dir below, hetzner_bootstrap_images_dir)
 #
-# We PIN a specific point release rather than tracking "-latest-": Proxmox
-# builds depend on a known-good Debian, and pinning keeps installs reproducible
-# for audit.  `tasks/validate-rescue.yml` asserts this image actually exists in
-# the rescue BEFORE installimage runs — see the rationale there (installimage
-# does not check image existence up front, so a stale/renamed name otherwise
-# fails late, mid-install).  Bump this when the pinned point release is retired;
-# the fail-fast check will list the available images if it has.
+# This DEFAULT tracks the newest trixie point release via the "-latest-" symlink
+# — a robust, generic value for the role: it does not 404 as Hetzner rolls point
+# releases (a stale pinned NAME is exactly what bit us once).  Consumers that
+# need reproducibility should PIN a specific point release in their own inventory
+# (group_vars/host_vars), e.g. the proxmox-install repo pins
+# `Debian-1303-trixie-amd64-base.tar.zst` on its provisioning group because
+# Proxmox builds depend on a known-good Debian.  Either way,
+# `tasks/validate-rescue.yml` asserts the chosen image exists in the rescue
+# BEFORE installimage runs (installimage does not check existence up front, so a
+# stale/renamed name otherwise fails late, mid-install) — `find -L` so a
+# "-latest-" symlink resolves; the check lists what IS available on a miss.
 #
 # FUTURE: hetzner-bootstrap-baremetal can serve installation types beyond
 # Proxmox-on-Debian.  Supporting operator-supplied custom images (uploaded into
 # the rescue, then referenced here) is a planned development path; not yet
 # implemented.
-hetzner_bootstrap_image: "Debian-1303-trixie-amd64-base.tar.zst"
+hetzner_bootstrap_image: "Debian-trixie-latest-amd64-base.tar.zst"
 
 # Directory the rescue serves images from.  Shared by the installimage template
 # (the IMAGE line) and the pre-flight existence check so they never drift.

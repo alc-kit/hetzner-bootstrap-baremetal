@@ -116,7 +116,7 @@ See `defaults/main.yml` for the full list, but the most useful overrides:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `hetzner_bootstrap_image` | `Debian-1303-trixie-amd64-base.tar.zst` | OS image. Must exist in the rescue (pre-flight `validate-rescue` asserts this and lists what's available on mismatch). Pinned, not `-latest-`, for reproducible Proxmox installs. |
+| `hetzner_bootstrap_image` | `Debian-trixie-latest-amd64-base.tar.zst` | OS image. Default tracks the newest trixie (robust, won't 404). Must exist in the rescue — pre-flight `validate-rescue` asserts this (`find -L`) and lists what's available on mismatch. **Pin a point release in your own inventory for reproducible installs** (e.g. `Debian-1303-trixie-amd64-base.tar.zst`). |
 | `hetzner_bootstrap_images_dir` | `/root/.oldroot/nfs/install/../images/` | Directory the rescue serves images from (shared by the `IMAGE` line and the existence check) |
 | `installimage_swraid` | `1` | `0`/`1`. Auto-disabled if only one OS disk is configured. |
 | `installimage_swraid_level` | `1` | `0`, `1`, `5`, `6`, or `10` |

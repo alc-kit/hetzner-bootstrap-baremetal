@@ -14,10 +14,12 @@ All notable changes to this role are documented here. This role is consumed via
   a dedicated path (`hetzner_bootstrap_installimage_config_path`, default
   `/root/installimage.conf`) and `-c` points there.
 - **Default image name corrected.** `Debian-1300-trixie-64-minimal.tar.gz` does
-  not exist on current rescue systems → install fails. Pinned to
-  `Debian-1303-trixie-amd64-base.tar.zst` (real file; modern
-  `<release>-<arch>-<variant>.tar.<zst|gz>` naming). Pinned (not `-latest-`) for
-  reproducible, audit-friendly Proxmox installs.
+  not exist on current rescue systems → install fails. The role default now
+  tracks `Debian-trixie-latest-amd64-base.tar.zst` (modern
+  `<release>-<arch>-<variant>.tar.<zst|gz>` naming; a `-latest-` symlink, so it
+  does not 404 as point releases roll). Consumers needing reproducibility pin a
+  specific point release in their own inventory — the validation below works for
+  both (`find -L` resolves the symlink).
 - **Default partition layout now UEFI-correct.** Added a `/boot/efi esp 256M`
   partition as the first entry. Without it, installimage aborts on UEFI hosts
   with `ERROR: ESP missing or multiple ESP found`. installimage mirrors the ESP
