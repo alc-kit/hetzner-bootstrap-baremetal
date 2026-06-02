@@ -116,10 +116,12 @@ See `defaults/main.yml` for the full list, but the most useful overrides:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `hetzner_bootstrap_image` | `Debian-1300-trixie-64-minimal.tar.gz` | OS image (must exist in rescue's `/root/.oldroot/nfs/images/`) |
+| `hetzner_bootstrap_image` | `Debian-1303-trixie-amd64-base.tar.zst` | OS image. Must exist in the rescue (pre-flight `validate-rescue` asserts this and lists what's available on mismatch). Pinned, not `-latest-`, for reproducible Proxmox installs. |
+| `hetzner_bootstrap_images_dir` | `/root/.oldroot/nfs/install/../images/` | Directory the rescue serves images from (shared by the `IMAGE` line and the existence check) |
 | `installimage_swraid` | `1` | `0`/`1`. Auto-disabled if only one OS disk is configured. |
 | `installimage_swraid_level` | `1` | `0`, `1`, `5`, `6`, or `10` |
-| `installimage_partitions` | `/boot 1G, swap 32G, / all` (all ext4) | List of partition dicts, each `{mount, fs, size}` |
+| `installimage_partitions` | `/boot/efi esp 256M, /boot 1G, swap 32G, / all` | List of partition dicts, each `{mount, fs, size}`. The ESP is required on UEFI hosts (pre-flight asserts exactly one); installimage mirrors it across SWRAID members. |
+| `hetzner_bootstrap_installimage_config_path` | `/root/installimage.conf` | Where the rendered config is written and passed to `installimage -c`. Must NOT be `/autosetup`. |
 | `installimage_hostname` | `{{ inventory_hostname_short }}` | Hostname written by installimage |
 | `installimage_bootloader` | `grub` | `grub` or `lilo` |
 | `installimage_post_install_script` | *unset* | Optional path to a script installimage runs in the chroot |
@@ -218,6 +220,7 @@ read it as the authoritative source of available data disks:
 | `ssh_key` | Register the SSH key with Robot |
 | `rescue` | Boot config + reset + wait for rescue SSH |
 | `discover` | Enumerate and validate disks in the rescue |
+| `preflight` | Fail-fast checks against the live rescue: image exists, UEFI/ESP sane |
 | `installimage` | Render config and run the installer |
 | `await` | Wait for the installed system to come up |
 
@@ -252,11 +255,22 @@ The server probably did not actually reboot into rescue — check the Robot UI
 for the current boot state and that the reset succeeded. Try
 `hetzner_bootstrap_reset_type: power` if `hardware` did not take.
 
-**`installimage` exits with rc=1**
-The role surfaces the last 200 lines of `/root/debug.txt`. Common causes:
-unsupported partition syntax, image filename typo, or a disk listed in
-`installimage_os_disks` that does not exist (caught earlier by the discover
-stage, but rare hardware reshuffles can race past it).
+**The role fails at `validate-rescue` (image or ESP)**
+This is the fail-fast guard doing its job, *before* any wipe. Either the
+configured `hetzner_bootstrap_image` is not present in this rescue (the error
+lists what *is* available — pick one, or bump the pinned release) or the host
+booted UEFI without an `esp` partition (add `{ mount: "/boot/efi", fs: "esp",
+size: "256M" }`). These exist because installimage does not check image
+existence up front and reports a missing ESP only as an opaque `Cancelled.`
+in `/root/debug.txt` — *after* the installer is already triggered.
+
+**`installimage` exits with rc=1 / prints `Cancelled.`**
+The role surfaces the last 200 lines of `/root/debug.txt` (look for the
+`ERROR:` line). `Cancelled.` specifically means installimage's own config
+validation rejected the layout — e.g. `ESP missing or multiple ESP found`
+(see above). Other common causes: unsupported partition syntax, or an image
+filetype/arch it cannot parse. A bad image *name* is caught earlier by
+`validate-rescue`; a disk that does not exist is caught by `discover`.
 
 **The post-reboot host never comes back**
 installimage's grub install can fail on weird disk layouts. Reboot into

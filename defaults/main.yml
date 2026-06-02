@@ -43,12 +43,34 @@ hetzner_bootstrap_ssh_key_robot_name: "hetzner-bootstrap-{{ inventory_hostname }
 # ----------------------------------------------------------------------------
 # OS image selection
 # ----------------------------------------------------------------------------
-# Image must exist under /root/.oldroot/nfs/images/ in the rescue system.
-# Browse available images with:  ls /root/.oldroot/nfs/images/  (in the rescue)
+# The image is a tarball that ships with the Hetzner rescue system.  Modern
+# rescue images use the naming  Debian-<NNNN>-<codename>-<arch>-<variant>.tar.<zst|gz>
+# (e.g. Debian-1303-trixie-amd64-base.tar.zst); the older
+# "Debian-1300-trixie-64-minimal.tar.gz" style no longer exists.  A "-latest-"
+# symlink (Debian-trixie-latest-amd64-base.tar.zst) tracks the newest point
+# release.
 #
-# We support only the latest Debian release.  Override if you have a strong
-# reason to pin an older image, but understand support is best-effort.
-hetzner_bootstrap_image: "Debian-1300-trixie-64-minimal.tar.gz"
+# Browse what THIS rescue actually has:
+#   ls /root/.oldroot/nfs/images/        (or the dir below, hetzner_bootstrap_images_dir)
+#
+# We PIN a specific point release rather than tracking "-latest-": Proxmox
+# builds depend on a known-good Debian, and pinning keeps installs reproducible
+# for audit.  `tasks/validate-rescue.yml` asserts this image actually exists in
+# the rescue BEFORE installimage runs — see the rationale there (installimage
+# does not check image existence up front, so a stale/renamed name otherwise
+# fails late, mid-install).  Bump this when the pinned point release is retired;
+# the fail-fast check will list the available images if it has.
+#
+# FUTURE: hetzner-bootstrap-baremetal can serve installation types beyond
+# Proxmox-on-Debian.  Supporting operator-supplied custom images (uploaded into
+# the rescue, then referenced here) is a planned development path; not yet
+# implemented.
+hetzner_bootstrap_image: "Debian-1303-trixie-amd64-base.tar.zst"
+
+# Directory the rescue serves images from.  Shared by the installimage template
+# (the IMAGE line) and the pre-flight existence check so they never drift.
+# Resolves to Hetzner's IMAGESPATH (installimage's $SCRIPTPATH/../images/).
+hetzner_bootstrap_images_dir: "/root/.oldroot/nfs/install/../images/"
 
 # ----------------------------------------------------------------------------
 # Disk selection  (REQUIRED — supply exactly ONE of the two vars below)
@@ -94,10 +116,21 @@ installimage_swraid_level: 1   # 0|1|5|6|10  (only relevant when swraid=1)
 #   fs:    filesystem: ext2|ext3|ext4|xfs|btrfs|swap|reiserfs
 #   size:  M/G/T suffix, or "all" to consume remaining space
 #
-# Keep at least /, /boot (or /boot/efi), and swap.  LVM is supported by
-# adding entries of the form { mount: lvm, fs: vg0, size: all }; see
-# Hetzner's installimage docs for the exact LV/PV syntax.
+# Keep at least /, /boot, and swap.  LVM is supported by adding entries of the
+# form { mount: lvm, fs: vg0, size: all }; see Hetzner's installimage docs for
+# the exact LV/PV syntax.
+#
+# UEFI: modern Hetzner servers boot UEFI, which REQUIRES exactly one EFI System
+# Partition (ESP) — `{ mount: "/boot/efi", fs: "esp", size: "256M" }` — or
+# installimage aborts validation with "ESP missing or multiple ESP found"
+# (after a wipe is already in motion).  It is included below by default;
+# `tasks/validate-rescue.yml` fails fast if the rescue booted UEFI and no ESP is
+# configured.  installimage mirrors the ESP across SWRAID members itself, so a
+# single esp line is correct even with software RAID.  On a legacy-BIOS host the
+# ESP is harmless (installimage only warns); drop it if you want a pure MBR
+# layout there.
 installimage_partitions:
+  - { mount: "/boot/efi", fs: "esp", size: "256M" }
   - { mount: "/boot", fs: "ext4", size: "1G" }
   - { mount: "swap", fs: "swap", size: "32G" }
   - { mount: "/", fs: "ext4", size: "all" }
@@ -107,6 +140,13 @@ installimage_partitions:
 # ----------------------------------------------------------------------------
 installimage_hostname: "{{ inventory_hostname_short | default(inventory_hostname) }}"
 installimage_bootloader: grub
+
+# Path the rendered installimage config is written to in the rescue, then passed
+# to `installimage -c`.  It MUST NOT be /autosetup: installimage's `-c` handler
+# copies the file to /autosetup itself (get_options.sh), so pointing -c at
+# /autosetup makes it `cp /autosetup /autosetup` → "are the same file" → the
+# installer cancels.  Any other path is fine.
+hetzner_bootstrap_installimage_config_path: "/root/installimage.conf"
 
 # ----------------------------------------------------------------------------
 # Optional: a post-install script that installimage runs after the new system

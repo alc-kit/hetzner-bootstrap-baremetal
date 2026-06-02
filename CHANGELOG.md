@@ -3,6 +3,54 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.2.0] - 2026-06-02
+
+### Fixed
+- **installimage no longer self-cancels.** The config was rendered to `/autosetup`
+  *and* passed as `installimage -a -c /autosetup`. installimage's `-c` handler
+  (`get_options.sh`) copies the config file to `/autosetup` itself, so this became
+  `cp /autosetup /autosetup` → `cp: ... are the same file`; the installer then
+  failed config validation and printed `Cancelled.` The config is now rendered to
+  a dedicated path (`hetzner_bootstrap_installimage_config_path`, default
+  `/root/installimage.conf`) and `-c` points there.
+- **Default image name corrected.** `Debian-1300-trixie-64-minimal.tar.gz` does
+  not exist on current rescue systems → install fails. Pinned to
+  `Debian-1303-trixie-amd64-base.tar.zst` (real file; modern
+  `<release>-<arch>-<variant>.tar.<zst|gz>` naming). Pinned (not `-latest-`) for
+  reproducible, audit-friendly Proxmox installs.
+- **Default partition layout now UEFI-correct.** Added a `/boot/efi esp 256M`
+  partition as the first entry. Without it, installimage aborts on UEFI hosts
+  with `ERROR: ESP missing or multiple ESP found`. installimage mirrors the ESP
+  across SWRAID members itself, so one esp line is correct even with software
+  RAID. Harmless (warning only) on legacy-BIOS hosts.
+- **Installer failures now surface the real error.** The `async_status` wait
+  hard-failed on a non-zero installer rc, which skipped the role's own
+  "Tail debug log" / "Fail with debug context" block — so the operator saw only
+  `Module failed: non-zero return code`, never the `/root/debug.txt` line that
+  explains *why*. Added `failed_when: false` to the wait so the explicit
+  debug-surfacing block runs.
+
+### Added
+- **New phase `validate-rescue` (tag `preflight`/`validate`), run after disk
+  discovery and before installimage — fail fast, not late.** installimage only
+  validates its config for internal consistency, *after* it has been invoked
+  against the target; a wrong image name or a missing ESP otherwise fails late
+  (mid-install) or opaquely (`Cancelled.` in `/root/debug.txt`). The new step,
+  read-only and `--check`-safe, asserts up front:
+  - the configured `hetzner_bootstrap_image` actually exists in the rescue
+    (`find -L` so a `-latest-` symlink resolves), listing what *is* available on
+    mismatch;
+  - on a UEFI host (`/sys/firmware/efi`), exactly one `esp` partition is
+    configured, with a message telling the operator exactly what to add.
+- `hetzner_bootstrap_images_dir` (default `/root/.oldroot/nfs/install/../images/`)
+  — shared by the template's `IMAGE` line and the existence check so they cannot
+  drift.
+- `hetzner_bootstrap_installimage_config_path` (default `/root/installimage.conf`).
+
+### Notes
+- **Future:** custom/operator-supplied image upload (for non-Proxmox install
+  types) is a planned development path; not implemented yet.
+
 ## [1.1.5] - 2026-06-02
 
 ### Added
