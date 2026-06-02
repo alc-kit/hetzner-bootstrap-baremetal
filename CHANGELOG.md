@@ -3,6 +3,23 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.1.4] - 2026-06-02
+
+### Fixed
+- `discover-disks`: the human-readable disk table used `| ljust(N)`, which is **not**
+  a Jinja filter → `No filter named 'ljust'`. Switched to the `.ljust(N)` string method
+  (`(name | regex_replace(...)).ljust(10)`, `size.ljust(8)`). This breaks a **real**
+  provision run as soon as the table renders (and the `--tags discover` path) — it is
+  not check-mode specific.
+
+### Note
+- `provision-hetzner-bare-metal.yml` is **not runnable under `--check`**: it is an
+  imperative wipe → reboot → wait sequence, and Ansible skips `command` tasks in check
+  mode (so `lsblk` yields `from_json('')`, then the async installer var is undefined,
+  then the post-reboot assert fails). Use the read-only `discover-disk-layout.yml`
+  (consumer side) for pre-wipe disk validation; the real provision is gated by the
+  tier-3 policy check + double confirmation.
+
 ## [1.1.3] - 2026-06-01
 
 ### Fixed

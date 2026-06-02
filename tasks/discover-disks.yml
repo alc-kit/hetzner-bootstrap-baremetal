@@ -83,8 +83,8 @@
     msg: |
       Disks visible in rescue system:
       {% for d in hetzner_bootstrap_all_disks %}
-        {{ d.name | regex_replace('^/dev/', '') | ljust(10) }}
-        {{ d.size | ljust(8) }}
+        {{ (d.name | regex_replace('^/dev/', '')).ljust(10) }}
+        {{ d.size.ljust(8) }}
         {{ 'rotational' if d.rota else 'flash     ' }}
         {{ d.model | default('?') }}
         SN={{ d.serial | default('?') }}
