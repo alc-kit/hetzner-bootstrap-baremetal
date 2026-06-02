@@ -37,4 +37,5 @@
 
 - name: "Wait for installed system"
   ansible.builtin.import_tasks: await-installed.yml
+  when: not ansible_check_mode   # nothing was installed or rebooted in --check
   tags: [hetzner_bootstrap, await]

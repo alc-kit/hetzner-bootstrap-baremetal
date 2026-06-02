@@ -3,6 +3,22 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.1.5] - 2026-06-02
+
+### Added
+- **`--check` is now a meaningful provisioning dry-run.** Everything except the one
+  un-simulatable step — the actual `installimage` wipe — runs in check mode: inventory
+  validation, SSH-key handling, rescue detection, disk enumeration + serial→device
+  resolution, and rendering `/autosetup`. The installer run, its async wait, and the
+  reboot are gated `when: not ansible_check_mode` (with a dry-run notice naming the
+  disks that *would* be wiped); the post-reboot verification (`await-installed`) is
+  skipped in check. Read-only steps Ansible would otherwise skip in check carry
+  `check_mode: false` (`lsblk` enumeration, the `/autosetup` render + dump). This
+  **supersedes the v1.1.4 "not runnable under --check" note.**
+- A check-mode run assumes the host is **already in the rescue** (the normal
+  pre-provision state, e.g. after `discover-disk-layout.yml`); `--check` does not
+  simulate the boot-into-rescue hardware reset.
+
 ## [1.1.4] - 2026-06-02
 
 ### Fixed

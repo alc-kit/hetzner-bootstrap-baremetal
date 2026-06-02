@@ -12,6 +12,7 @@
     cmd: lsblk -dnpJ -o NAME,SIZE,TYPE,MODEL,SERIAL,WWN,ROTA
   register: _lsblk
   changed_when: false
+  check_mode: false   # read-only enumeration; must run in --check or the from_json below gets ''
 
 - name: "Parse disk list"
   ansible.builtin.set_fact:
