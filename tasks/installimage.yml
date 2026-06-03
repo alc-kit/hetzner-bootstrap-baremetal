@@ -9,15 +9,15 @@
 - name: "Render configuration"
   ansible.builtin.template:
     src: installimage.conf.j2
-    dest: /autosetup
+    dest: "{{ hetzner_bootstrap_installimage_config_path }}"
     owner: root
     group: root
     mode: "0600"
-  check_mode: false   # render even in --check so the config can be validated; rescue is throwaway and /autosetup is only consumed by the installer (gated below)
+  check_mode: false   # render in --check too so the config is validated; rescue is throwaway and the config is only consumed by the installer (gated below)
 
 - name: "Dump rendered config to log (for the operator)"
   ansible.builtin.command:
-    cmd: cat /autosetup
+    cmd: cat {{ hetzner_bootstrap_installimage_config_path }}
   register: _rendered_config
   changed_when: false
   check_mode: false
@@ -33,8 +33,10 @@
   when: ansible_check_mode
   ansible.builtin.debug:
     msg: >-
-      CHECK MODE: validated rescue, disk selection and the rendered /autosetup.
-      Skipping the only un-simulatable steps — `installimage -a -c /autosetup`
+      CHECK MODE: validated rescue, disk selection, image availability, UEFI/ESP
+      and the rendered config ({{ hetzner_bootstrap_installimage_config_path }}).
+      Skipping the only un-simulatable steps —
+      `installimage -a -c {{ hetzner_bootstrap_installimage_config_path }}`
       (WIPES {{ installimage_os_disks }}), the reboot, and the post-reboot
       verification (await-installed). Re-run without --check to provision.
 
@@ -42,8 +44,10 @@
   when: not ansible_check_mode
   block:
     - name: "Run the installer (async, this takes 5-15 min)"
+      # -c must point at a NON-/autosetup file: installimage copies the -c file
+      # to /autosetup itself, so `-c /autosetup` self-copies and cancels.
       ansible.builtin.command:
-        cmd: /root/.oldroot/nfs/install/installimage -a -c /autosetup
+        cmd: /root/.oldroot/nfs/install/installimage -a -c {{ hetzner_bootstrap_installimage_config_path }}
       async: "{{ hetzner_bootstrap_installimage_timeout_seconds }}"
       poll: 0
       register: _installimage_job
@@ -56,6 +60,11 @@
       until: _installimage_result.finished
       retries: "{{ (hetzner_bootstrap_installimage_timeout_seconds // 30) | int }}"
       delay: 30
+      # Don't hard-fail here on a non-zero installer rc: a finished-but-failed
+      # job still satisfies `until`, and failing on it would skip the debug-log
+      # surfacing below. The explicit "Fail with debug context" task owns the
+      # failure so /root/debug.txt (the real error, e.g. "ESP missing") is shown.
+      failed_when: false
 
     - name: "Surface debug log on failure"
       when: (_installimage_result.rc | default(1)) != 0

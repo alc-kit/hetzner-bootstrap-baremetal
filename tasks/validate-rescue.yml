@@ -1,0 +1,83 @@
+---
+# Pre-flight checks that need the LIVE rescue system, run AFTER disk discovery
+# and immediately BEFORE installimage. These are read-only (and run under
+# --check) so a dry-run catches a misconfiguration before any wipe.
+#
+# WHY THIS EXISTS — fail fast, not late:
+#   installimage validates its config (validate_vars in functions.sh) only for
+#   internal consistency, AFTER it has already been invoked against the target.
+#   Two real failure modes slip past that and only surface late — after you have
+#   committed to a reinstall:
+#     1. A wrong/renamed IMAGE name. installimage does NOT check image existence
+#        up front; the name parses fine and the install fails much later (at
+#        extract), or silently installs nothing useful.
+#     2. A UEFI host with no ESP. installimage aborts with the opaque
+#        "ESP missing or multiple ESP found" and prints "Cancelled." — only in
+#        /root/debug.txt, after the installer was already triggered.
+#   Both are cheap to detect here, against the live rescue, with a clear message
+#   naming exactly what to fix. That is the whole point of this step.
+
+# ── 1. The configured OS image actually exists in this rescue ────────────────
+- name: "Enumerate OS images available in the rescue"
+  # -L so a "-latest-" symlink resolves and still matches as a regular file;
+  # broken symlinks are correctly excluded. .sig signatures are not images.
+  ansible.builtin.command:
+    cmd: find -L {{ hetzner_bootstrap_images_dir }} -maxdepth 1 -type f ! -name '*.sig' -printf '%f\n'
+  register: _available_images
+  changed_when: false
+  check_mode: false   # read-only enumeration; must run in --check too
+
+- name: "Assert the configured OS image exists in the rescue"
+  ansible.builtin.assert:
+    that:
+      - hetzner_bootstrap_image in (_available_images.stdout_lines | default([]))
+    fail_msg: |-
+      Configured OS image '{{ hetzner_bootstrap_image }}' was not found under
+      {{ hetzner_bootstrap_images_dir }} in this rescue system.
+
+      (Failing here on purpose: installimage does not validate image existence
+      up front, so a stale/renamed name would otherwise fail late — mid-install,
+      after a wipe is already in motion.)
+
+      Images available in this rescue:
+      {% for img in (_available_images.stdout_lines | default([]) | sort) %}
+        - {{ img }}
+      {% endfor %}
+      Set hetzner_bootstrap_image (role default, or group_vars/host_vars) to one
+      of the names above.
+    success_msg: >-
+      OS image '{{ hetzner_bootstrap_image }}' is present in the rescue
+      ({{ hetzner_bootstrap_images_dir }}).
+
+# ── 2. UEFI hosts must have exactly one ESP in the partition layout ──────────
+- name: "Detect firmware boot mode (UEFI vs legacy BIOS) in the rescue"
+  ansible.builtin.stat:
+    path: /sys/firmware/efi
+  register: _efi_firmware
+  check_mode: false
+
+- name: "Assert exactly one ESP is configured when the rescue booted UEFI"
+  ansible.builtin.assert:
+    that:
+      - (installimage_partitions | selectattr('fs', 'eq', 'esp') | list | length) == 1
+    fail_msg: |-
+      This server booted in UEFI mode (/sys/firmware/efi is present) but
+      installimage_partitions defines
+      {{ installimage_partitions | selectattr('fs', 'eq', 'esp') | list | length }}
+      EFI System Partition(s).
+
+      On UEFI, installimage requires EXACTLY ONE esp partition mounted at
+      /boot/efi, otherwise it aborts config validation with
+      "ESP missing or multiple ESP found" — only visible in /root/debug.txt,
+      after the installer was already triggered.
+
+      Add one as the first partition (installimage mirrors it across SWRAID
+      members itself, so a single line is correct even with software RAID):
+
+        installimage_partitions:
+          - mount: "/boot/efi"
+            fs: "esp"
+            size: "256M"
+          - ...   # your existing /boot, swap, / entries
+    success_msg: "UEFI boot detected; exactly one ESP is configured."
+  when: _efi_firmware.stat.exists

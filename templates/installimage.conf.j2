@@ -1,7 +1,7 @@
 ## ============================================================================
 ## installimage configuration  --  rendered by hetzner-bootstrap-baremetal
 ## host:   {{ inventory_hostname }}
-## time:   {{ ansible_date_time.iso8601 | default('?') }}
+## time:   {{ ansible_facts.date_time.iso8601 | default('?') }}
 ## ============================================================================
 ##
 ## installimage only touches disks listed as DRIVE<N> below.  All other
@@ -24,7 +24,7 @@ SWRAID 0
 
 BOOTLOADER {{ installimage_bootloader }}
 
-IMAGE /root/.oldroot/nfs/install/../images/{{ hetzner_bootstrap_image }}
+IMAGE {{ hetzner_bootstrap_images_dir }}{{ hetzner_bootstrap_image }}
 
 {% for part in installimage_partitions %}
 PART {{ part.mount }} {{ part.fs }} {{ part.size }}

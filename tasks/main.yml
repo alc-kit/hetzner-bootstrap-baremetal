@@ -9,8 +9,9 @@
 #   2. prepare-ssh-key     read pubkey, register with Robot if missing
 #   3. rescue-boot         set rescue boot, hardware reset, wait for SSH
 #   4. discover-disks      enumerate disks in rescue, validate selection
-#   5. installimage        render config, run installer, reboot
-#   6. await-installed     re-fingerprint, wait for installed SSH
+#   5. validate-rescue     fail-fast: image exists in rescue, UEFI/ESP sane
+#   6. installimage        render config, run installer, reboot
+#   7. await-installed     re-fingerprint, wait for installed SSH
 #
 # Phase boundaries are also tag-addressable; see tags assigned below.
 # ============================================================================
@@ -30,6 +31,10 @@
 - name: "Discover and validate disks"
   ansible.builtin.import_tasks: discover-disks.yml
   tags: [hetzner_bootstrap, discover, disks]
+
+- name: "Validate install config against the live rescue (image + UEFI/ESP)"
+  ansible.builtin.import_tasks: validate-rescue.yml
+  tags: [hetzner_bootstrap, validate, preflight]
 
 - name: "Run installimage"
   ansible.builtin.import_tasks: installimage.yml
