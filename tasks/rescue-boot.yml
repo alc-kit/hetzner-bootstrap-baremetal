@@ -67,18 +67,18 @@
   # could match (wipe gate). If the gather failed, these are undefined → '' → false.
   ansible.builtin.set_fact:
     _in_rescue: "{{ _host_responds | bool
-                    and ('rescue' in (ansible_kernel | default('') | lower)
-                         or (ansible_distribution | default('') | lower) in ['archlinux', 'rescue']
-                         or (ansible_hostname | default('') | lower == 'rescue')
-                         or (ansible_nodename | default('') | lower == 'rescue')) }}"
+                    and ('rescue' in (ansible_facts.kernel | default('') | lower)
+                         or (ansible_facts.distribution | default('') | lower) in ['archlinux', 'rescue']
+                         or (ansible_facts.hostname | default('') | lower == 'rescue')
+                         or (ansible_facts.nodename | default('') | lower == 'rescue')) }}"
 
 - name: "Bail out if an INSTALLED system is up and force is not set"
   ansible.builtin.fail:
     msg: >-
       Host {{ ansible_host | default(inventory_hostname) }} appears to run an
-      installed system (hostname={{ ansible_hostname | default('?') }},
-      kernel={{ ansible_kernel | default('?') }},
-      distro={{ ansible_distribution | default('?') }}).  Refusing to reinstall.
+      installed system (hostname={{ ansible_facts.hostname | default('?') }},
+      kernel={{ ansible_facts.kernel | default('?') }},
+      distro={{ ansible_facts.distribution | default('?') }}).  Refusing to reinstall.
       Set hetzner_bootstrap_force_reinstall: true to override.
   when:
     - _host_responds | bool
@@ -141,13 +141,13 @@
 - name: "Sanity-check we are actually in the rescue, not the installed OS"
   ansible.builtin.assert:
     that:
-      - "'rescue' in (ansible_kernel | default('') | lower)
-         or (ansible_distribution | default('') | lower) in ['archlinux', 'rescue']
-         or (ansible_hostname | default('') | lower == 'rescue')
-         or (ansible_nodename | default('') | lower == 'rescue')"
+      - "'rescue' in (ansible_facts.kernel | default('') | lower)
+         or (ansible_facts.distribution | default('') | lower) in ['archlinux', 'rescue']
+         or (ansible_facts.hostname | default('') | lower == 'rescue')
+         or (ansible_facts.nodename | default('') | lower == 'rescue')"
     fail_msg: >-
       Connected host does not look like the Hetzner rescue system
-      (hostname={{ ansible_hostname | default('?') }},
-      kernel={{ ansible_kernel | default('?') }},
-      distro={{ ansible_distribution | default('?') }}).
+      (hostname={{ ansible_facts.hostname | default('?') }},
+      kernel={{ ansible_facts.kernel | default('?') }},
+      distro={{ ansible_facts.distribution | default('?') }}).
       Aborting to avoid wiping a live system.

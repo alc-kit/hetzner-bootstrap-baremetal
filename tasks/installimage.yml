@@ -9,57 +9,83 @@
 - name: "Render configuration"
   ansible.builtin.template:
     src: installimage.conf.j2
-    dest: /autosetup
+    dest: "{{ hetzner_bootstrap_installimage_config_path }}"
     owner: root
     group: root
     mode: "0600"
+  check_mode: false   # render in --check too so the config is validated; rescue is throwaway and the config is only consumed by the installer (gated below)
 
 - name: "Dump rendered config to log (for the operator)"
   ansible.builtin.command:
-    cmd: cat /autosetup
+    cmd: cat {{ hetzner_bootstrap_installimage_config_path }}
   register: _rendered_config
   changed_when: false
+  check_mode: false
 
 - name: "Echo rendered config"
   ansible.builtin.debug:
     var: _rendered_config.stdout_lines
 
-- name: "Run the installer (async, this takes 5-15 min)"
-  ansible.builtin.command:
-    cmd: /root/.oldroot/nfs/install/installimage -a -c /autosetup
-  async: "{{ hetzner_bootstrap_installimage_timeout_seconds }}"
-  poll: 0
-  register: _installimage_job
-  changed_when: true
+# ── The only steps --check cannot simulate: the actual wipe + reboot. ─────────
+# Everything above (validate, ssh-key, rescue, disk discovery, rendered config)
+# has run, so --check is a meaningful dry-run that stops exactly here.
+- name: "DRY RUN (check mode) — would run installimage + reboot, skipping"
+  when: ansible_check_mode
+  ansible.builtin.debug:
+    msg: >-
+      CHECK MODE: validated rescue, disk selection, image availability, UEFI/ESP
+      and the rendered config ({{ hetzner_bootstrap_installimage_config_path }}).
+      Skipping the only un-simulatable steps —
+      `installimage -a -c {{ hetzner_bootstrap_installimage_config_path }}`
+      (WIPES {{ installimage_os_disks }}), the reboot, and the post-reboot
+      verification (await-installed). Re-run without --check to provision.
 
-- name: "Wait for installer to finish"
-  ansible.builtin.async_status:
-    jid: "{{ _installimage_job.ansible_job_id }}"
-  register: _installimage_result
-  until: _installimage_result.finished
-  retries: "{{ (hetzner_bootstrap_installimage_timeout_seconds // 30) | int }}"
-  delay: 30
-
-- name: "Surface debug log on failure"
-  when: (_installimage_result.rc | default(1)) != 0
+- name: "Install the OS and reboot (skipped in --check)"
+  when: not ansible_check_mode
   block:
-    - name: "Tail debug log"
+    - name: "Run the installer (async, this takes 5-15 min)"
+      # -c must point at a NON-/autosetup file: installimage copies the -c file
+      # to /autosetup itself, so `-c /autosetup` self-copies and cancels.
       ansible.builtin.command:
-        cmd: tail -200 /root/debug.txt
-      register: _debug_tail
-      changed_when: false
+        cmd: /root/.oldroot/nfs/install/installimage -a -c {{ hetzner_bootstrap_installimage_config_path }}
+      async: "{{ hetzner_bootstrap_installimage_timeout_seconds }}"
+      poll: 0
+      register: _installimage_job
+      changed_when: true
+
+    - name: "Wait for installer to finish"
+      ansible.builtin.async_status:
+        jid: "{{ _installimage_job.ansible_job_id }}"
+      register: _installimage_result
+      until: _installimage_result.finished
+      retries: "{{ (hetzner_bootstrap_installimage_timeout_seconds // 30) | int }}"
+      delay: 30
+      # Don't hard-fail here on a non-zero installer rc: a finished-but-failed
+      # job still satisfies `until`, and failing on it would skip the debug-log
+      # surfacing below. The explicit "Fail with debug context" task owns the
+      # failure so /root/debug.txt (the real error, e.g. "ESP missing") is shown.
       failed_when: false
 
-    - name: "Fail with debug context"
-      ansible.builtin.fail:
-        msg: |
-          installimage exited rc={{ _installimage_result.rc | default('?') }}.
-          Last 200 lines of /root/debug.txt:
-          {{ _debug_tail.stdout }}
+    - name: "Surface debug log on failure"
+      when: (_installimage_result.rc | default(1)) != 0
+      block:
+        - name: "Tail debug log"
+          ansible.builtin.command:
+            cmd: tail -200 /root/debug.txt
+          register: _debug_tail
+          changed_when: false
+          failed_when: false
 
-- name: "Reboot into the freshly-installed OS"
-  ansible.builtin.reboot:
-    reboot_timeout: "{{ hetzner_bootstrap_installed_wait_seconds }}"
-    pre_reboot_delay: 5
-    post_reboot_delay: 15
-    msg: "hetzner-bootstrap: rebooting into installed system"
+        - name: "Fail with debug context"
+          ansible.builtin.fail:
+            msg: |
+              installimage exited rc={{ _installimage_result.rc | default('?') }}.
+              Last 200 lines of /root/debug.txt:
+              {{ _debug_tail.stdout }}
+
+    - name: "Reboot into the freshly-installed OS"
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ hetzner_bootstrap_installed_wait_seconds }}"
+        pre_reboot_delay: 5
+        post_reboot_delay: 15
+        msg: "hetzner-bootstrap: rebooting into installed system"

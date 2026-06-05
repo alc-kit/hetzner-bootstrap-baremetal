@@ -3,6 +3,79 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.2.0] - 2026-06-02
+
+### Fixed
+- **installimage no longer self-cancels.** The config was rendered to `/autosetup`
+  *and* passed as `installimage -a -c /autosetup`. installimage's `-c` handler
+  (`get_options.sh`) copies the config file to `/autosetup` itself, so this became
+  `cp /autosetup /autosetup` → `cp: ... are the same file`; the installer then
+  failed config validation and printed `Cancelled.` The config is now rendered to
+  a dedicated path (`hetzner_bootstrap_installimage_config_path`, default
+  `/root/installimage.conf`) and `-c` points there.
+- **Default image name corrected.** `Debian-1300-trixie-64-minimal.tar.gz` does
+  not exist on current rescue systems → install fails. The role default now
+  tracks `Debian-trixie-latest-amd64-base.tar.zst` (modern
+  `<release>-<arch>-<variant>.tar.<zst|gz>` naming; a `-latest-` symlink, so it
+  does not 404 as point releases roll). Consumers needing reproducibility pin a
+  specific point release in their own inventory — the validation below works for
+  both (`find -L` resolves the symlink).
+- **Default partition layout now UEFI-correct.** Added a `/boot/efi esp 256M`
+  partition as the first entry. Without it, installimage aborts on UEFI hosts
+  with `ERROR: ESP missing or multiple ESP found`. installimage mirrors the ESP
+  across SWRAID members itself, so one esp line is correct even with software
+  RAID. Harmless (warning only) on legacy-BIOS hosts.
+- **Installer failures now surface the real error.** The `async_status` wait
+  hard-failed on a non-zero installer rc, which skipped the role's own
+  "Tail debug log" / "Fail with debug context" block — so the operator saw only
+  `Module failed: non-zero return code`, never the `/root/debug.txt` line that
+  explains *why*. Added `failed_when: false` to the wait so the explicit
+  debug-surfacing block runs.
+
+### Added
+- **New phase `validate-rescue` (tag `preflight`/`validate`), run after disk
+  discovery and before installimage — fail fast, not late.** installimage only
+  validates its config for internal consistency, *after* it has been invoked
+  against the target; a wrong image name or a missing ESP otherwise fails late
+  (mid-install) or opaquely (`Cancelled.` in `/root/debug.txt`). The new step,
+  read-only and `--check`-safe, asserts up front:
+  - the configured `hetzner_bootstrap_image` actually exists in the rescue
+    (`find -L` so a `-latest-` symlink resolves), listing what *is* available on
+    mismatch;
+  - on a UEFI host (`/sys/firmware/efi`), exactly one `esp` partition is
+    configured, with a message telling the operator exactly what to add.
+- `hetzner_bootstrap_images_dir` (default `/root/.oldroot/nfs/install/../images/`)
+  — shared by the template's `IMAGE` line and the existence check so they cannot
+  drift.
+- `hetzner_bootstrap_installimage_config_path` (default `/root/installimage.conf`).
+
+### Changed
+- All gathered-fact references use `ansible_facts.<name>` instead of the
+  top-level `ansible_<name>` vars (e.g. `ansible_facts.kernel`,
+  `ansible_facts.distribution`). Silences the `INJECT_FACTS_AS_VARS` deprecation
+  (top-level fact injection is removed in ansible-core 2.24). Connection/magic
+  vars (`ansible_host`, `ansible_check_mode`, …) are unaffected and unchanged.
+
+### Notes
+- **Future:** custom/operator-supplied image upload (for non-Proxmox install
+  types) is a planned development path; not implemented yet.
+
+## [1.1.5] - 2026-06-02
+
+### Added
+- **`--check` is now a meaningful provisioning dry-run.** Everything except the one
+  un-simulatable step — the actual `installimage` wipe — runs in check mode: inventory
+  validation, SSH-key handling, rescue detection, disk enumeration + serial→device
+  resolution, and rendering `/autosetup`. The installer run, its async wait, and the
+  reboot are gated `when: not ansible_check_mode` (with a dry-run notice naming the
+  disks that *would* be wiped); the post-reboot verification (`await-installed`) is
+  skipped in check. Read-only steps Ansible would otherwise skip in check carry
+  `check_mode: false` (`lsblk` enumeration, the `/autosetup` render + dump). This
+  **supersedes the v1.1.4 "not runnable under --check" note.**
+- A check-mode run assumes the host is **already in the rescue** (the normal
+  pre-provision state, e.g. after `discover-disk-layout.yml`); `--check` does not
+  simulate the boot-into-rescue hardware reset.
+
 ## [1.1.4] - 2026-06-02
 
 ### Fixed
