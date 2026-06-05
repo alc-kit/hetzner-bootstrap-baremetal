@@ -3,6 +3,13 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [1.2.1] - 2026-06-05
+
+### Fixed
+- **validation tasks now run for multiple hosts.** The validation tasks previously
+  did not validate more than the first host in a run, this has now changed so that
+  every host is validated.
+
 ## [1.2.0] - 2026-06-02
 
 ### Fixed
