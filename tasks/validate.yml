@@ -2,6 +2,11 @@
 # Pre-flight: refuse to call the Robot API if inventory is incomplete.
 # These checks are intentionally local-only (delegate_to: localhost) so they
 # can run before the server is reachable.
+#
+# They must run per host (NOT run_once): every assert below reads per-host
+# vars (hetzner_server_number, the OS-disk selection, swraid). run_once would
+# template against the first host only and silently skip validation for every
+# other server in a multi-host batch.
 
 - name: "Required inventory variables are set"
   ansible.builtin.assert:
@@ -21,7 +26,6 @@
       hetzner_bootstrap_image.
     success_msg: "Inventory looks complete."
   delegate_to: localhost
-  run_once: true
 
 - name: "OS-disk selection is unambiguous (serials XOR names)"
   ansible.builtin.assert:
@@ -33,7 +37,6 @@
       device names in the rescue, stable across reboots) OR installimage_os_disks
       (raw device names) — not both.
   delegate_to: localhost
-  run_once: true
 
 - name: "SWRAID configuration is consistent"
   ansible.builtin.assert:
