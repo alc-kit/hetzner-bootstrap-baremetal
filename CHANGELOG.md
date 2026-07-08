@@ -5,6 +5,22 @@ All notable changes to this role are documented here. This role is consumed via
 
 ## [Unreleased]
 
+### Changed
+- **Image selection is now intent-based and resolved from the rescue, with no
+  silent fallback.** `hetzner_bootstrap_image` now defaults to `""`; when empty,
+  new `resolve-image.yml` resolves the concrete tarball IN-RESCUE (the only
+  authoritative source — Hetzner exposes no API for installimage filenames) from
+  `hetzner_bootstrap_image_{codename,arch,variant}` (default trixie/amd64/base),
+  picking the newest `Debian-<NNNN>-<codename>-<arch>-<variant>.tar.*` and
+  **ignoring the `-latest-` symlink** (which was observed installing bookworm
+  when trixie was intended). If nothing matches — or a pinned image is absent —
+  the role ABORTS and lists what is available; it never substitutes another
+  version. `await-installed` additionally asserts the booted release equals the
+  requested codename (`hetzner_bootstrap_verify_installed_codename`, default
+  true), so a name-matched-but-wrong-release image aborts before any downstream
+  role runs. Pin `hetzner_bootstrap_image` to an exact filename to opt out of
+  resolution. See README "Image selection".
+
 ### Added
 - **Set + verify root credentials on the installed system.** installimage only
   copies the single rescue SSH key and sets no root password, so root access

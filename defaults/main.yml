@@ -41,35 +41,34 @@ hetzner_bootstrap_ssh_public_key_path: "{{ lookup('env', 'HOME') }}/.ssh/id_ed25
 hetzner_bootstrap_ssh_key_robot_name: "hetzner-bootstrap-{{ inventory_hostname }}"
 
 # ----------------------------------------------------------------------------
-# OS image selection
+# OS image selection  (intent-based; resolved from the rescue itself)
 # ----------------------------------------------------------------------------
-# The image is a tarball that ships with the Hetzner rescue system.  Modern
-# rescue images use the naming  Debian-<NNNN>-<codename>-<arch>-<variant>.tar.<zst|gz>
-# (e.g. Debian-1303-trixie-amd64-base.tar.zst); the older
-# "Debian-1300-trixie-64-minimal.tar.gz" style no longer exists.  A "-latest-"
-# symlink (Debian-trixie-latest-amd64-base.tar.zst) tracks the newest point
-# release.
+# installimage bases are tarballs shipped in the Hetzner rescue, named
+# Debian-<NNNN>-<codename>-<arch>-<variant>.tar.<zst|gz>
+# (e.g. Debian-1303-trixie-amd64-base.tar.zst).  There is NO Hetzner API that
+# lists them — the Robot API returns only human-readable rescue-distro names —
+# so the ONLY authoritative source is the rescue's own image directory.
 #
-# Browse what THIS rescue actually has:
-#   ls /root/.oldroot/nfs/images/        (or the dir below, hetzner_bootstrap_images_dir)
+# The role therefore resolves the concrete filename AT PROVISION TIME from that
+# directory (tasks/resolve-image.yml), driven by the intent vars below: it picks
+# the newest concrete point release matching {codename, arch, variant} and
+# DELIBERATELY IGNORES the "-latest-" convenience symlink.  That symlink has been
+# observed resolving to the WRONG release in the field (installing bookworm when
+# trixie was intended), so it is not trusted.
 #
-# This DEFAULT tracks the newest trixie point release via the "-latest-" symlink
-# — a robust, generic value for the role: it does not 404 as Hetzner rolls point
-# releases (a stale pinned NAME is exactly what bit us once).  Consumers that
-# need reproducibility should PIN a specific point release in their own inventory
-# (group_vars/host_vars), e.g. the proxmox-install repo pins
-# `Debian-1303-trixie-amd64-base.tar.zst` on its provisioning group because
-# Proxmox builds depend on a known-good Debian.  Either way,
-# `tasks/validate-rescue.yml` asserts the chosen image exists in the rescue
-# BEFORE installimage runs (installimage does not check existence up front, so a
-# stale/renamed name otherwise fails late, mid-install) — `find -L` so a
-# "-latest-" symlink resolves; the check lists what IS available on a miss.
-#
-# FUTURE: hetzner-bootstrap-baremetal can serve installation types beyond
-# Proxmox-on-Debian.  Supporting operator-supplied custom images (uploaded into
-# the rescue, then referenced here) is a planned development path; not yet
-# implemented.
-hetzner_bootstrap_image: "Debian-trixie-latest-amd64-base.tar.zst"
+# Set hetzner_bootstrap_image to a concrete filename ONLY to pin an exact image
+# (auto-resolution is then skipped; validate-rescue still asserts it exists).
+# Leave it EMPTY (default) to auto-resolve from the intent vars.
+hetzner_bootstrap_image: ""
+
+hetzner_bootstrap_image_codename: trixie
+hetzner_bootstrap_image_arch: amd64
+hetzner_bootstrap_image_variant: base
+
+# After install, assert the booted release matches hetzner_bootstrap_image_codename
+# (await-installed.yml), so a mislabeled/wrong image fails at PROVISION time rather
+# than later in a downstream role.  Set false to skip (e.g. non-Debian images).
+hetzner_bootstrap_verify_installed_codename: true
 
 # Directory the rescue serves images from.  Shared by the installimage template
 # (the IMAGE line) and the pre-flight existence check so they never drift.

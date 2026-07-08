@@ -12,17 +12,22 @@ run on top).
    not already there (idempotent).
 3. **Activates rescue mode** for the target server and **hardware-resets**
    it into the rescue.
-4. **Enumerates disks** in the rescue and validates that the operator-supplied
+4. **Resolves the OS image** from the rescue's own image directory by intent
+   (codename/arch/variant), picking the newest concrete point-release and
+   ignoring the unreliable `-latest-` symlink — **aborting** if nothing matches
+   rather than falling back. See [Image selection](#image-selection).
+5. **Enumerates disks** in the rescue and validates that the operator-supplied
    list of OS disks actually exists on the host.
-5. **Frees the OS disks of stale software RAID** — stops any mdadm array the
+6. **Frees the OS disks of stale software RAID** — stops any mdadm array the
    rescue auto-assembled on the selected OS disks and clears their RAID +
    partition signatures, so `installimage` can repartition cleanly (data disks
    are never touched). See [Reinstall hygiene](#reinstall-hygiene-stale-raid).
-6. **Runs `installimage`** with a templated config that wipes only the OS
+7. **Runs `installimage`** with a templated config that wipes only the OS
    disks; all other block devices are left pristine.
-7. **Reboots** into the installed system and waits for SSH to come up on the
-   real OS, with its new host key accepted.
-8. **Sets and verifies root credentials** — ensures root's `authorized_keys`
+8. **Reboots** into the installed system, waits for SSH on the real OS, and
+   **asserts the installed release matches the requested codename** (aborts on a
+   wrong-release image rather than proceeding).
+9. **Sets and verifies root credentials** — ensures root's `authorized_keys`
    **and** a root password are both in place, then proves each one works from
    the controller. See [Root credentials](#root-credentials).
 
@@ -124,8 +129,12 @@ See `defaults/main.yml` for the full list, but the most useful overrides:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `hetzner_bootstrap_image` | `Debian-trixie-latest-amd64-base.tar.zst` | OS image. Default tracks the newest trixie (robust, won't 404). Must exist in the rescue — pre-flight `validate-rescue` asserts this (`find -L`) and lists what's available on mismatch. **Pin a point release in your own inventory for reproducible installs** (e.g. `Debian-1303-trixie-amd64-base.tar.zst`). |
-| `hetzner_bootstrap_images_dir` | `/root/.oldroot/nfs/install/../images/` | Directory the rescue serves images from (shared by the `IMAGE` line and the existence check) |
+| `hetzner_bootstrap_image` | `""` (empty → auto-resolve) | Exact image filename to pin. Leave empty (default) to auto-resolve from the intent vars below. A non-empty value skips resolution; `validate-rescue` still asserts it exists. See [Image selection](#image-selection). |
+| `hetzner_bootstrap_image_codename` | `trixie` | Debian codename to resolve (used when `hetzner_bootstrap_image` is empty). |
+| `hetzner_bootstrap_image_arch` | `amd64` | Architecture to resolve. |
+| `hetzner_bootstrap_image_variant` | `base` | Image variant to resolve (`base`, `minimal`, …, as present in the rescue). |
+| `hetzner_bootstrap_verify_installed_codename` | `true` | After install, assert the booted release equals the codename — aborts on a wrong-release image. Set `false` for non-Debian images. |
+| `hetzner_bootstrap_images_dir` | `/root/.oldroot/nfs/install/../images/` | Directory the rescue serves images from (shared by resolution, the `IMAGE` line, and the existence check) |
 | `installimage_swraid` | `1` | `0`/`1`. Auto-disabled if only one OS disk is configured. |
 | `installimage_swraid_level` | `1` | `0`, `1`, `5`, `6`, or `10` |
 | `installimage_partitions` | `/boot/efi esp 256M, /boot 1G, swap 32G, / all` | List of partition dicts, each `{mount, fs, size}`. The ESP is required on UEFI hosts (pre-flight asserts exactly one); installimage mirrors it across SWRAID members. |
@@ -228,6 +237,41 @@ read it as the authoritative source of available data disks:
     clevis_encryption_disks: "{{ hetzner_bootstrap_data_disks }}"
 ```
 
+## Image selection
+
+There is **no Hetzner API that lists installimage base-image filenames** — the
+Robot API only returns human-readable rescue-distro names. The single
+authoritative source for what a given rescue can install is that rescue's own
+image directory. So instead of pinning a brittle exact filename (which you can
+only discover by shelling into a rescue), you declare **intent** and the role
+resolves the concrete filename in-rescue at provision time (`resolve-image.yml`):
+
+```yaml
+hetzner_bootstrap_image_codename: trixie   # what you want
+hetzner_bootstrap_image_arch: amd64
+hetzner_bootstrap_image_variant: base
+# hetzner_bootstrap_image: ""              # empty → auto-resolve; set to pin exactly
+```
+
+It matches `Debian-<NNNN>-<codename>-<arch>-<variant>.tar.*`, picks the **newest
+concrete point-release**, and **deliberately ignores the `-latest-` symlink** —
+that symlink has been seen resolving to the wrong release in the field
+(installing bookworm when trixie was intended).
+
+**No silent fallback — it aborts instead.** If nothing matches the intent (or a
+pinned `hetzner_bootstrap_image` is absent), the role fails and lists what *is*
+available; it never substitutes a different version. And after install,
+`await-installed` asserts the booted release equals the requested codename
+(`hetzner_bootstrap_verify_installed_codename`), so an image whose *name* matched
+but installed the wrong release still aborts — before any downstream role runs.
+
+To just eyeball the menu without provisioning, the resolution step logs every
+base image it finds; run the rescue + image phases only:
+
+```bash
+ansible-playbook ... --tags 'rescue,image'
+```
+
 ## Reinstall hygiene (stale RAID)
 
 Does installimage unmount/stop the assembled boot devices before reinstalling?
@@ -293,7 +337,8 @@ guarantees **both** auth methods and then **proves** each independently:
 | `validate` | Local validation only — never talks to Robot or the server |
 | `ssh_key` | Register the SSH key with Robot |
 | `rescue` | Boot config + reset + wait for rescue SSH |
-| `discover` | Enumerate and validate disks in the rescue |
+| `image` | Resolve the concrete OS image from the rescue by intent |
+| `discover` | Enumerate disks (and, with `image`, list available OS images) in the rescue |
 | `preflight` | Fail-fast checks against the live rescue: image exists, UEFI/ESP sane |
 | `disks` / `wipe` | Stop stale RAID + clear signatures on the OS disks |
 | `installimage` | Render config and run the installer |

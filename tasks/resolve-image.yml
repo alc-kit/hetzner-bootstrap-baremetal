@@ -1,0 +1,73 @@
+---
+# Resolve the concrete installimage base-image tarball from the rescue's own
+# image directory — the ONLY authoritative source for what THIS rescue can
+# install.  Hetzner's Robot API exposes no installimage filenames, and the
+# "-latest-" convenience symlink is unreliable: it has been seen resolving to the
+# wrong Debian release in the field (silently installing bookworm instead of
+# trixie), which then only surfaced two playbooks later at the Proxmox OS check.
+#
+# Operator specifies INTENT (codename/arch/variant) in inventory; this picks the
+# highest concrete point-release actually present
+# (Debian-<NNNN>-<codename>-<arch>-<variant>.tar.*), deliberately IGNORING the
+# "-latest-" symlink.  A non-empty hetzner_bootstrap_image short-circuits
+# resolution (kept for exact pins; validate-rescue still checks it exists).
+#
+# Runs in the rescue (needs the mounted images dir), after rescue-boot.
+
+- name: "Resolve image | explicit image pinned — skip auto-resolution"
+  ansible.builtin.debug:
+    msg: >-
+      Using operator-pinned hetzner_bootstrap_image '{{ hetzner_bootstrap_image }}'
+      — auto-resolution from codename/arch/variant skipped.
+  when: (hetzner_bootstrap_image | default('') | length) > 0
+
+- name: "Resolve image | discover + select from the rescue image directory"
+  when: (hetzner_bootstrap_image | default('') | length) == 0
+  block:
+    - name: "Resolve image | list ALL base images present (reference / discover)"
+      # tag: discover — `--tags rescue,image` gives a read-only dump of the menu
+      # without provisioning.  .sig files are signatures, not images.
+      ansible.builtin.command:
+        cmd: find -L {{ hetzner_bootstrap_images_dir }} -maxdepth 1 -type f ! -name '*.sig' -printf '%f\n'
+      register: _hbb_image_all
+      changed_when: false
+      check_mode: false
+
+    - name: "Resolve image | match concrete point-release images for {{ hetzner_bootstrap_image_codename }}"
+      # The numeric prefix (Debian-<NNNN>-) matches only concrete point releases
+      # and by construction EXCLUDES the 'Debian-<codename>-latest-...' symlink.
+      # sort -V orders point releases naturally, so the newest is last.
+      ansible.builtin.set_fact:
+        _hbb_image_matches: >-
+          {{ _hbb_image_all.stdout_lines | default([])
+             | select('match', '^Debian-[0-9]+-' ~ hetzner_bootstrap_image_codename
+                      ~ '-' ~ hetzner_bootstrap_image_arch
+                      ~ '-' ~ hetzner_bootstrap_image_variant ~ '\.tar\.[a-z0-9]+$')
+             | list | sort }}
+
+    - name: "Resolve image | fail clearly if no matching image exists"
+      ansible.builtin.fail:
+        msg: |-
+          No installimage base image matched intent
+          codename={{ hetzner_bootstrap_image_codename }} arch={{ hetzner_bootstrap_image_arch }} variant={{ hetzner_bootstrap_image_variant }}
+          under {{ hetzner_bootstrap_images_dir }} in this rescue.
+
+          Images available here:
+          {% for img in (_hbb_image_all.stdout_lines | default([]) | sort) %}
+            - {{ img }}
+          {% endfor %}
+          Adjust hetzner_bootstrap_image_{codename,arch,variant}, or pin
+          hetzner_bootstrap_image explicitly to one of the names above.
+      when: (_hbb_image_matches | length) == 0
+
+    - name: "Resolve image | select the newest concrete point-release"
+      ansible.builtin.set_fact:
+        hetzner_bootstrap_image: "{{ _hbb_image_matches | last }}"
+
+    - name: "Resolve image | report resolved image + candidates"
+      ansible.builtin.debug:
+        msg:
+          - "Resolved hetzner_bootstrap_image = {{ hetzner_bootstrap_image }}"
+          - >-
+            candidates ({{ hetzner_bootstrap_image_codename }}/{{ hetzner_bootstrap_image_arch }}/{{ hetzner_bootstrap_image_variant }}):
+            {{ _hbb_image_matches }}

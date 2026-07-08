@@ -8,13 +8,14 @@
 #   1. validate            sanity-check inventory vars before touching Robot
 #   2. prepare-ssh-key     read pubkey, register with Robot if missing
 #   3. rescue-boot         set rescue boot, hardware reset, wait for SSH
-#   4. discover-disks      enumerate disks in rescue, validate selection
-#   5. validate-rescue     fail-fast: image exists in rescue, UEFI/ESP sane
-#   6. prepare-os-disks    stop stale RAID + wipe signatures on the OS disks
-#   7. installimage        render config, run installer, reboot
-#   8. await-installed     re-fingerprint, wait for installed SSH
-#   9. set-root-credentials  authorised_keys + root password on the new system
-#  10. verify-root-credentials  prove BOTH auth methods from the controller
+#   4. resolve-image       resolve the concrete image from the rescue by intent
+#   5. discover-disks      enumerate disks in rescue, validate selection
+#   6. validate-rescue     fail-fast: image exists in rescue, UEFI/ESP sane
+#   7. prepare-os-disks    stop stale RAID + wipe signatures on the OS disks
+#   8. installimage        render config, run installer, reboot
+#   9. await-installed     re-fingerprint, wait for installed SSH, assert release
+#  10. set-root-credentials  authorised_keys + root password on the new system
+#  11. verify-root-credentials  prove BOTH auth methods from the controller
 #
 # Phase boundaries are also tag-addressable; see tags assigned below.
 # ============================================================================
@@ -30,6 +31,10 @@
 - name: "Boot into rescue system"
   ansible.builtin.import_tasks: rescue-boot.yml
   tags: [hetzner_bootstrap, rescue]
+
+- name: "Resolve the OS image from the rescue image directory"
+  ansible.builtin.import_tasks: resolve-image.yml
+  tags: [hetzner_bootstrap, image, discover]
 
 - name: "Discover and validate disks"
   ansible.builtin.import_tasks: discover-disks.yml

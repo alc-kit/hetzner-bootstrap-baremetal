@@ -32,6 +32,25 @@
       (kernel={{ ansible_facts.kernel }}, distro={{ ansible_facts.distribution }}).
       installimage may have failed silently or the wrong image was selected.
 
+- name: "Assert the installed Debian release matches the requested codename"
+  # The image name matched, but did it install the release we asked for?  A
+  # mislabeled tarball or an untrustworthy '-latest-' symlink can install the
+  # WRONG release (e.g. bookworm when trixie was intended).  ABORT here rather
+  # than hand a wrong-release host to downstream roles — never silently proceed.
+  ansible.builtin.assert:
+    that:
+      - (ansible_facts.distribution_release | lower) == (hetzner_bootstrap_image_codename | lower)
+    fail_msg: >-
+      Installed Debian release is '{{ ansible_facts.distribution_release }}' but
+      hetzner_bootstrap_image_codename requested '{{ hetzner_bootstrap_image_codename }}'
+      (image used: {{ hetzner_bootstrap_image }}).  The rescue image did not
+      install the expected release.  Refusing to continue — fix the image
+      selection and re-provision before running any downstream role.
+    success_msg: >-
+      Installed release '{{ ansible_facts.distribution_release }}' matches the
+      requested codename.
+  when: hetzner_bootstrap_verify_installed_codename | default(true) | bool
+
 - name: "Summary"
   ansible.builtin.debug:
     msg: |
