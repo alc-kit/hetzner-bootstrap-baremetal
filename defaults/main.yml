@@ -167,6 +167,14 @@ hetzner_bootstrap_installimage_config_path: "/root/installimage.conf"
 # intentionally wiping a server.
 hetzner_bootstrap_force_reinstall: false
 
+# Before installimage runs, stop any software RAID (mdadm) the rescue
+# auto-assembled on the SELECTED OS disks and clear their RAID + partition
+# signatures (tasks/prepare-os-disks.yml).  Prevents the common reinstall
+# failures where the target disks are held open by an assembled array, or a
+# leftover superblock causes the new array to re-absorb a stale member.  Only
+# installimage_os_disks are touched; data disks are never referenced.
+hetzner_bootstrap_wipe_os_disks_before_install: true
+
 # Reset type sent to the Robot API to reboot into rescue.
 # Options: "hardware" (recommended), "power", "manual", "software".
 hetzner_bootstrap_reset_type: hardware
@@ -177,3 +185,67 @@ hetzner_bootstrap_reset_type: hardware
 hetzner_bootstrap_rescue_wait_seconds: 600
 hetzner_bootstrap_installimage_timeout_seconds: 1800
 hetzner_bootstrap_installed_wait_seconds: 600
+
+# ----------------------------------------------------------------------------
+# Root credentials on the INSTALLED system  (set + verified)
+# ----------------------------------------------------------------------------
+# installimage only copies ONE SSH key (the rescue key) into the new system and
+# sets NO root password — so root access hangs on that single key.  If it is
+# ever removed the host is unreachable with no fallback (exactly the lock-out
+# this block prevents).  When enabled, the role — over the key-authenticated
+# connection await-installed just established — guarantees BOTH auth methods and
+# then PROVES each one from the controller (verify-root-credentials.yml), so a
+# later accidental removal of one still leaves a working break-glass fallback.
+#
+# The role's contract is "both methods work at hand-off"; keeping them working
+# for the host's whole life is a fleet-config concern (a later hardening role
+# that rewrites sshd_config must preserve the drop-in below to keep the password
+# fallback).  See README "Root credentials".
+hetzner_bootstrap_manage_root_credentials: true
+
+# Private key matching hetzner_bootstrap_ssh_public_key_path — used ONLY by the
+# post-install key-auth probe (verify-root-credentials.yml).  Defaults to the
+# public key path with the trailing ".pub" stripped.
+hetzner_bootstrap_ssh_private_key_path: "{{ hetzner_bootstrap_ssh_public_key_path | regex_replace('\\.pub$', '') }}"
+
+# SSH public keys authorised for root on the installed system.  Defaults to the
+# provisioning key (registered with Robot in prepare-ssh-key.yml); append
+# operator / break-glass keys here for redundancy.
+hetzner_bootstrap_root_authorized_keys:
+  - "{{ hetzner_bootstrap_ssh_public_key }}"
+
+# When true, root's authorized_keys is REPLACED with exactly the list above
+# (any other key is removed).  Default false: additive — installimage's copied
+# key and any pre-existing keys are kept.
+hetzner_bootstrap_root_authorized_keys_exclusive: false
+
+# Break-glass root password.  REQUIRED (non-empty) when
+# hetzner_bootstrap_set_root_password is true — supply it VAULTED.  A plaintext
+# value is hashed (sha512) before it touches the host; a value that already
+# looks like a crypt hash ("$6$...") is used verbatim (but password auth then
+# cannot be verified — see below).
+hetzner_bootstrap_set_root_password: true
+hetzner_bootstrap_root_password: ""
+
+# Permit root password login in sshd so the password is a genuine fallback.
+# Writes /etc/ssh/sshd_config.d/00-hetzner-bootstrap-rootlogin.conf (sorts
+# first → wins over later drop-ins and the stock config).
+# SECURITY: this enables PermitRootLogin yes + PasswordAuthentication yes.
+# These hosts are managed over the internal VLAN/VPN; use a strong vaulted
+# password.  Set false to leave sshd untouched (password set but only usable
+# where password auth is already permitted, e.g. the Robot KVM console).
+hetzner_bootstrap_permit_root_password_login: true
+
+# systemd unit name for the SSH daemon on the installed system (Debian: "ssh").
+hetzner_bootstrap_sshd_service: ssh
+
+# After setting credentials, verify BOTH methods from the controller and FAIL
+# if either does not authenticate.  Password verification needs `sshpass` on
+# the controller AND a plaintext hetzner_bootstrap_root_password; when either is
+# missing the password probe is SKIPPED with a warning (key probe still runs).
+hetzner_bootstrap_verify_root_credentials: true
+
+# Address the controller probes during verification.  Defaults to the address
+# Ansible is already using for this host (the public IP during provisioning,
+# when use_public is set in the consuming inventory).
+hetzner_bootstrap_verify_ssh_host: "{{ ansible_host | default(inventory_hostname) }}"

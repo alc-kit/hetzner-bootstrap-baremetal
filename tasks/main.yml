@@ -10,8 +10,11 @@
 #   3. rescue-boot         set rescue boot, hardware reset, wait for SSH
 #   4. discover-disks      enumerate disks in rescue, validate selection
 #   5. validate-rescue     fail-fast: image exists in rescue, UEFI/ESP sane
-#   6. installimage        render config, run installer, reboot
-#   7. await-installed     re-fingerprint, wait for installed SSH
+#   6. prepare-os-disks    stop stale RAID + wipe signatures on the OS disks
+#   7. installimage        render config, run installer, reboot
+#   8. await-installed     re-fingerprint, wait for installed SSH
+#   9. set-root-credentials  authorised_keys + root password on the new system
+#  10. verify-root-credentials  prove BOTH auth methods from the controller
 #
 # Phase boundaries are also tag-addressable; see tags assigned below.
 # ============================================================================
@@ -36,6 +39,11 @@
   ansible.builtin.import_tasks: validate-rescue.yml
   tags: [hetzner_bootstrap, validate, preflight]
 
+- name: "Free the OS disks of stale software RAID before installimage"
+  ansible.builtin.import_tasks: prepare-os-disks.yml
+  when: hetzner_bootstrap_wipe_os_disks_before_install | bool
+  tags: [hetzner_bootstrap, disks, wipe]
+
 - name: "Run installimage"
   ansible.builtin.import_tasks: installimage.yml
   tags: [hetzner_bootstrap, installimage]
@@ -44,3 +52,18 @@
   ansible.builtin.import_tasks: await-installed.yml
   when: not ansible_check_mode   # nothing was installed or rebooted in --check
   tags: [hetzner_bootstrap, await]
+
+- name: "Set root credentials (authorized_keys + password) on the installed system"
+  ansible.builtin.import_tasks: set-root-credentials.yml
+  when:
+    - not ansible_check_mode
+    - hetzner_bootstrap_manage_root_credentials | bool
+  tags: [hetzner_bootstrap, credentials]
+
+- name: "Verify BOTH root auth methods (key + password) from the controller"
+  ansible.builtin.import_tasks: verify-root-credentials.yml
+  when:
+    - not ansible_check_mode
+    - hetzner_bootstrap_manage_root_credentials | bool
+    - hetzner_bootstrap_verify_root_credentials | bool
+  tags: [hetzner_bootstrap, credentials, verify]
