@@ -42,7 +42,11 @@
 
 - name: "Validate install config against the live rescue (image + UEFI/ESP)"
   ansible.builtin.import_tasks: validate-rescue.yml
-  tags: [hetzner_bootstrap, validate, preflight]
+  # NOT tagged 'validate': this talks to the live rescue (enumerates images), so
+  # it is a 'preflight' check, not local validation. Keeping it off 'validate'
+  # lets `--tags validate` run purely locally (delegate_to localhost) — safe to
+  # dry-run anywhere, matching the README's "validate = local only" contract.
+  tags: [hetzner_bootstrap, preflight]
 
 - name: "Free the OS disks of stale software RAID before installimage"
   ansible.builtin.import_tasks: prepare-os-disks.yml
