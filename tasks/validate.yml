@@ -18,12 +18,18 @@
       # OS-disk selection: one of installimage_os_disk_serials (recommended,
       # stable across rescue reboots) or installimage_os_disks (device names).
       - ((installimage_os_disks | default([])) + (installimage_os_disk_serials | default([]))) | length >= 1
-      - hetzner_bootstrap_image is defined and hetzner_bootstrap_image | length > 0
+      # Image: either an EXACT pin (hetzner_bootstrap_image) OR the intent to
+      # resolve one in-rescue (hetzner_bootstrap_image_codename). resolve-image.yml
+      # turns intent into a concrete filename later; here we only require that ONE
+      # of the two is present so the run cannot reach installimage with neither.
+      - (hetzner_bootstrap_image | default('') | length > 0)
+        or (hetzner_bootstrap_image_codename | default('') | length > 0)
     fail_msg: >-
       Missing required variables.  See README for the minimal host_vars set:
       hetzner_robot_user, hetzner_robot_password, hetzner_server_number,
       one of (installimage_os_disk_serials | installimage_os_disks),
-      hetzner_bootstrap_image.
+      and either hetzner_bootstrap_image (exact pin) or
+      hetzner_bootstrap_image_codename (intent; role default 'trixie').
     success_msg: "Inventory looks complete."
   delegate_to: localhost
 
