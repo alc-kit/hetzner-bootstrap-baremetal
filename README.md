@@ -12,16 +12,29 @@ run on top).
    not already there (idempotent).
 3. **Activates rescue mode** for the target server and **hardware-resets**
    it into the rescue.
-4. **Enumerates disks** in the rescue and validates that the operator-supplied
+4. **Resolves the OS image** from the rescue's own image directory by intent
+   (codename/arch/variant), picking the newest concrete point-release and
+   ignoring the unreliable `-latest-` symlink — **aborting** if nothing matches
+   rather than falling back. See [Image selection](#image-selection).
+5. **Enumerates disks** in the rescue and validates that the operator-supplied
    list of OS disks actually exists on the host.
-5. **Runs `installimage`** with a templated config that wipes only the OS
+6. **Frees the OS disks of stale software RAID** — stops any mdadm array the
+   rescue auto-assembled on the selected OS disks and clears their RAID +
+   partition signatures, so `installimage` can repartition cleanly (data disks
+   are never touched). See [Reinstall hygiene](#reinstall-hygiene-stale-raid).
+7. **Runs `installimage`** with a templated config that wipes only the OS
    disks; all other block devices are left pristine.
-6. **Reboots** into the installed system and waits for SSH to come up on the
-   real OS, with its new host key accepted.
+8. **Reboots** into the installed system, waits for SSH on the real OS, and
+   **asserts the installed release matches the requested codename** (aborts on a
+   wrong-release image rather than proceeding).
+9. **Sets and verifies root credentials** — ensures root's `authorized_keys`
+   **and** a root password are both in place, then proves each one works from
+   the controller. See [Root credentials](#root-credentials).
 
 After the role finishes, the host is reachable as root over SSH with the
-public key you provided, on the same IP it was ordered with. From there, any
-downstream role can pick up.
+public key you provided **and** (by default) a break-glass root password — both
+verified — on the same IP it was ordered with. From there, any downstream role
+can pick up.
 
 ## Supported targets
 
@@ -116,8 +129,12 @@ See `defaults/main.yml` for the full list, but the most useful overrides:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `hetzner_bootstrap_image` | `Debian-trixie-latest-amd64-base.tar.zst` | OS image. Default tracks the newest trixie (robust, won't 404). Must exist in the rescue — pre-flight `validate-rescue` asserts this (`find -L`) and lists what's available on mismatch. **Pin a point release in your own inventory for reproducible installs** (e.g. `Debian-1303-trixie-amd64-base.tar.zst`). |
-| `hetzner_bootstrap_images_dir` | `/root/.oldroot/nfs/install/../images/` | Directory the rescue serves images from (shared by the `IMAGE` line and the existence check) |
+| `hetzner_bootstrap_image` | `""` (empty → auto-resolve) | Exact image filename to pin. Leave empty (default) to auto-resolve from the intent vars below. A non-empty value skips resolution; `validate-rescue` still asserts it exists. See [Image selection](#image-selection). |
+| `hetzner_bootstrap_image_codename` | `trixie` | Debian codename to resolve (used when `hetzner_bootstrap_image` is empty). |
+| `hetzner_bootstrap_image_arch` | `amd64` | Architecture to resolve. |
+| `hetzner_bootstrap_image_variant` | `base` | Image variant to resolve (`base`, `minimal`, …, as present in the rescue). |
+| `hetzner_bootstrap_verify_installed_codename` | `true` | After install, assert the booted release equals the codename — aborts on a wrong-release image. Set `false` for non-Debian images. |
+| `hetzner_bootstrap_images_dir` | `/root/.oldroot/nfs/install/../images/` | Directory the rescue serves images from (shared by resolution, the `IMAGE` line, and the existence check) |
 | `installimage_swraid` | `1` | `0`/`1`. Auto-disabled if only one OS disk is configured. |
 | `installimage_swraid_level` | `1` | `0`, `1`, `5`, `6`, or `10` |
 | `installimage_partitions` | `/boot/efi esp 256M, /boot 1G, swap 32G, / all` | List of partition dicts, each `{mount, fs, size}`. The ESP is required on UEFI hosts (pre-flight asserts exactly one); installimage mirrors it across SWRAID members. |
@@ -127,10 +144,19 @@ See `defaults/main.yml` for the full list, but the most useful overrides:
 | `installimage_post_install_script` | *unset* | Optional path to a script installimage runs in the chroot |
 | `hetzner_bootstrap_ssh_public_key_path` | `~/.ssh/id_ed25519.pub` | Local pubkey to register with Robot |
 | `hetzner_bootstrap_force_reinstall` | `false` | Allow reinstall of a server that is currently up |
+| `hetzner_bootstrap_wipe_os_disks_before_install` | `true` | Stop stale mdadm RAID + clear signatures on the OS disks before installimage (see [Reinstall hygiene](#reinstall-hygiene-stale-raid)) |
 | `hetzner_bootstrap_reset_type` | `hardware` | `hardware`, `power`, `manual`, `software` |
 | `hetzner_bootstrap_rescue_wait_seconds` | `600` | How long to wait for rescue SSH |
 | `hetzner_bootstrap_installimage_timeout_seconds` | `1800` | Hard ceiling on installer runtime |
 | `hetzner_bootstrap_installed_wait_seconds` | `600` | How long to wait for installed SSH |
+| `hetzner_bootstrap_manage_root_credentials` | `true` | Master switch for the set+verify credentials phase ([Root credentials](#root-credentials)) |
+| `hetzner_bootstrap_root_authorized_keys` | `[<provisioning key>]` | SSH public keys authorised for root on the installed system; append operator/break-glass keys |
+| `hetzner_bootstrap_root_authorized_keys_exclusive` | `false` | `true` = replace root's `authorized_keys` with exactly this set; `false` = additive |
+| `hetzner_bootstrap_set_root_password` | `true` | Set a break-glass root password (REQUIRES `hetzner_bootstrap_root_password`, vaulted) |
+| `hetzner_bootstrap_root_password` | `""` | The root password (vault it). Plaintext is hashed on the target via `chpasswd`; a `$6$…` crypt hash is used as-is |
+| `hetzner_bootstrap_permit_root_password_login` | `true` | Write an sshd drop-in enabling `PermitRootLogin`/`PasswordAuthentication` so the password is a real fallback |
+| `hetzner_bootstrap_verify_root_credentials` | `true` | After setting, prove BOTH methods from the controller; fail if key auth doesn't work (password probe needs `sshpass` + a plaintext password) |
+| `hetzner_bootstrap_ssh_private_key_path` | `<pubkey path minus .pub>` | Private key for the post-install key-auth probe |
 
 ## Disk selection
 
@@ -211,6 +237,98 @@ read it as the authoritative source of available data disks:
     clevis_encryption_disks: "{{ hetzner_bootstrap_data_disks }}"
 ```
 
+## Image selection
+
+There is **no Hetzner API that lists installimage base-image filenames** — the
+Robot API only returns human-readable rescue-distro names. The single
+authoritative source for what a given rescue can install is that rescue's own
+image directory. So instead of pinning a brittle exact filename (which you can
+only discover by shelling into a rescue), you declare **intent** and the role
+resolves the concrete filename in-rescue at provision time (`resolve-image.yml`):
+
+```yaml
+hetzner_bootstrap_image_codename: trixie   # what you want
+hetzner_bootstrap_image_arch: amd64
+hetzner_bootstrap_image_variant: base
+# hetzner_bootstrap_image: ""              # empty → auto-resolve; set to pin exactly
+```
+
+It matches `Debian-<NNNN>-<codename>-<arch>-<variant>.tar.*`, picks the **newest
+concrete point-release**, and **deliberately ignores the `-latest-` symlink** —
+that symlink has been seen resolving to the wrong release in the field
+(installing bookworm when trixie was intended).
+
+**No silent fallback — it aborts instead.** If nothing matches the intent (or a
+pinned `hetzner_bootstrap_image` is absent), the role fails and lists what *is*
+available; it never substitutes a different version. And after install,
+`await-installed` asserts the booted release equals the requested codename
+(`hetzner_bootstrap_verify_installed_codename`), so an image whose *name* matched
+but installed the wrong release still aborts — before any downstream role runs.
+
+To just eyeball the menu without provisioning, the resolution step logs every
+base image it finds; run the rescue + image phases only:
+
+```bash
+ansible-playbook ... --tags 'rescue,image'
+```
+
+## Reinstall hygiene (stale RAID)
+
+Does installimage unmount/stop the assembled boot devices before reinstalling?
+**Not reliably.** The Hetzner rescue system auto-assembles any pre-existing
+mdadm array on boot. installimage *attempts* to stop RAID, but when an array is
+assembled on the very disks it must repartition, this is fragile: the disks stay
+held open (partition/format fails partway), or the freshly-created array
+silently re-absorbs an old member because a leftover mdadm superblock survived.
+On a RAID1 OS pair (the common Hetzner layout) that surfaces as an install that
+fails late or a system that boots degraded.
+
+So before installimage runs, `tasks/prepare-os-disks.yml`
+(`hetzner_bootstrap_wipe_os_disks_before_install`, default `true`):
+
+1. Finds the mdadm arrays backed by the **selected OS disks** (via `lsblk` — it
+   never looks at data disks).
+2. `swapoff`s and unmounts anything on those disks / arrays.
+3. `mdadm --stop`s the arrays and `--zero-superblock`s every OS disk + partition
+   (kills the re-absorb-a-stale-member case).
+4. `wipefs -a` + GPT/MBR zap (`sgdisk --zap-all`, or a `dd` fallback).
+5. Re-checks and **asserts** no array still references an OS disk before handing
+   off to the installer.
+
+Scope is enforced by an assert that the OS-disk selection does **not** overlap
+`hetzner_bootstrap_data_disks`, and the whole file is guarded to run only in the
+rescue system. It is skipped in `--check`.
+
+## Root credentials
+
+installimage copies only the single rescue SSH key into the new system and sets
+**no** root password — so root access hangs on that one key. If it is ever
+removed, the host is locked out with no fallback. To prevent that, after the
+install the role (`hetzner_bootstrap_manage_root_credentials`, default `true`)
+guarantees **both** auth methods and then **proves** each independently:
+
+- **`authorized_keys`** — every key in `hetzner_bootstrap_root_authorized_keys`
+  is authorised for root (additive by default; set
+  `…_exclusive: true` to replace the set exactly).
+- **Root password** — `hetzner_bootstrap_root_password` (vault it) is set via
+  `chpasswd` on the target, and an sshd drop-in
+  (`/etc/ssh/sshd_config.d/00-hetzner-bootstrap-rootlogin.conf`, sorts first so
+  it wins) permits root password login so it is a genuine fallback.
+- **Verification** — `verify-root-credentials.yml` opens two logins from the
+  controller, each forcing a single method (pubkey-only, then password-only).
+  Key auth failing fails the play; the password probe needs `sshpass` on the
+  controller and a plaintext password (a pre-hashed value can't be logged in
+  with, so it's skipped with a warning).
+
+> **Security note.** `hetzner_bootstrap_permit_root_password_login: true` enables
+> `PermitRootLogin yes` + `PasswordAuthentication yes`. These hosts are managed
+> over an internal VLAN/VPN; use a strong, vaulted password. The role's contract
+> is "both methods work **at hand-off**" — keeping the password fallback alive
+> for the host's whole life is a fleet concern: a later hardening role that
+> rewrites sshd_config must preserve (or re-create) that drop-in. Set the flag
+> `false` to leave sshd untouched (the password is still set, but only usable
+> where password auth is already permitted, e.g. the Robot KVM console).
+
 ## Tags
 
 | Tag | What it runs |
@@ -219,10 +337,14 @@ read it as the authoritative source of available data disks:
 | `validate` | Local validation only — never talks to Robot or the server |
 | `ssh_key` | Register the SSH key with Robot |
 | `rescue` | Boot config + reset + wait for rescue SSH |
-| `discover` | Enumerate and validate disks in the rescue |
+| `image` | Resolve the concrete OS image from the rescue by intent |
+| `discover` | Enumerate disks (and, with `image`, list available OS images) in the rescue |
 | `preflight` | Fail-fast checks against the live rescue: image exists, UEFI/ESP sane |
+| `disks` / `wipe` | Stop stale RAID + clear signatures on the OS disks |
 | `installimage` | Render config and run the installer |
 | `await` | Wait for the installed system to come up |
+| `credentials` | Set root authorized_keys + password on the installed system |
+| `verify` | Prove both root auth methods from the controller |
 
 Useful combinations:
 

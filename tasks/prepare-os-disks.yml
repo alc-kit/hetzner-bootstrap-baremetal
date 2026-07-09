@@ -1,0 +1,165 @@
+---
+# Reinstall hygiene — free the OS disks of any stale software RAID before
+# installimage runs.
+#
+# The Hetzner rescue system auto-assembles any pre-existing mdadm array on boot.
+# installimage attempts to stop RAID itself, but when an array is assembled on
+# the very disks it must repartition this is unreliable: the disks stay held
+# open (partition/format fails), or the freshly-created array re-absorbs an old
+# member because a leftover mdadm superblock survived.  So here — in the rescue,
+# AFTER the image/UEFI preflight passed and BEFORE the wipe — we stop the arrays
+# backed by the SELECTED OS disks and clear their RAID + partition signatures.
+#
+# Scope guarantees:
+#   * Only installimage_os_disks are touched.  hetzner_bootstrap_data_disks are
+#     never referenced here (an explicit assert enforces no overlap).
+#   * Gated on hetzner_bootstrap_wipe_os_disks_before_install and, like the
+#     installimage wipe itself, skipped in --check.
+
+- name: "OS-disk prep | guard — must be running in the rescue system"
+  # Defence in depth: rescue-boot already proved this, but the tag surface lets
+  # this file run alone.  Never zap disks on a booted production host.
+  ansible.builtin.assert:
+    that:
+      - "'rescue' in (ansible_facts.kernel | default('') | lower)
+         or (ansible_facts.hostname | default('') | lower == 'rescue')
+         or (ansible_facts.nodename | default('') | lower == 'rescue')"
+    fail_msg: >-
+      Refusing to wipe OS disks: this host does not look like the Hetzner rescue
+      (kernel={{ ansible_facts.kernel | default('?') }},
+      hostname={{ ansible_facts.hostname | default('?') }}).
+
+- name: "OS-disk prep | build the target device path list"
+  ansible.builtin.set_fact:
+    _hbb_os_dev_paths: "{{ installimage_os_disks | map('regex_replace', '^', '/dev/') | list }}"
+
+- name: "OS-disk prep | SAFETY — OS selection must not overlap the data disks"
+  ansible.builtin.assert:
+    that:
+      - installimage_os_disks | length > 0
+      - (installimage_os_disks | intersect(hetzner_bootstrap_data_disks | default([]))) | length == 0
+    fail_msg: >-
+      OS/data disk selection overlaps
+      (os={{ installimage_os_disks }}, data={{ hetzner_bootstrap_data_disks | default([]) }})
+      — aborting before any destructive operation.
+
+- name: "OS-disk prep | find MD arrays backed by the OS disks"
+  # For each OS disk, list its block-device descendants of type raidN and collect
+  # the parent MD device paths (deduplicated).  Read-only — safe in --check.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      for d in {{ _hbb_os_dev_paths | join(' ') }}; do
+        lsblk -nrpo NAME,TYPE "$d" | awk '$2 ~ /^raid/ {print $1}'
+      done | sort -u
+    executable: /bin/bash
+  register: _hbb_md
+  changed_when: false
+  check_mode: false
+
+- name: "OS-disk prep | MD arrays found on the OS disks"
+  ansible.builtin.debug:
+    msg: "{{ _hbb_md.stdout_lines | default([]) | ternary(_hbb_md.stdout_lines, ['(none — disks already free of assembled RAID)']) }}"
+
+- name: "OS-disk prep | stop RAID + wipe signatures (skipped in --check)"
+  when: not ansible_check_mode
+  block:
+    - name: "OS-disk prep | swapoff any swap on the OS disks"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_os_dev_paths | join(' ') }}; do
+            for p in $(lsblk -nrpo NAME "$d" | tail -n +2); do
+              swapoff "$p" 2>/dev/null || true
+            done
+          done
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "OS-disk prep | unmount anything mounted from the OS disks / their arrays"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for dev in {{ (_hbb_os_dev_paths + (_hbb_md.stdout_lines | default([]))) | join(' ') }}; do
+            for m in $(lsblk -nrpo NAME "$dev"); do
+              umount -f "$m" 2>/dev/null || true
+            done
+          done
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "OS-disk prep | stop the MD arrays backed by the OS disks"
+      ansible.builtin.command: "mdadm --stop {{ item }}"
+      loop: "{{ _hbb_md.stdout_lines | default([]) }}"
+      register: _hbb_mdstop
+      changed_when: _hbb_mdstop.rc == 0
+      failed_when:
+        - _hbb_mdstop.rc != 0
+        - "'does not exist' not in (_hbb_mdstop.stderr | default(''))"
+        - "'No such' not in (_hbb_mdstop.stderr | default(''))"
+
+    - name: "OS-disk prep | zero mdadm superblocks on the OS disks + partitions"
+      # Clears the leftover-superblock case where a new array silently re-absorbs
+      # an old member.  || true: a device with no superblock returns non-zero.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_os_dev_paths | join(' ') }}; do
+            for dev in "$d" $(lsblk -nrpo NAME "$d" | tail -n +2); do
+              mdadm --zero-superblock "$dev" 2>/dev/null || true
+            done
+          done
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "OS-disk prep | wipe fs/RAID/partition-table signatures on the OS disks"
+      ansible.builtin.command: "wipefs -a {{ item }}"
+      loop: "{{ _hbb_os_dev_paths }}"
+      changed_when: true
+
+    - name: "OS-disk prep | zap GPT/MBR on the OS disks"
+      # sgdisk clears both the primary AND backup GPT header; fall back to dd of
+      # the first + last 10 MiB when sgdisk is absent from the rescue.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_os_dev_paths | join(' ') }}; do
+            if command -v sgdisk >/dev/null 2>&1; then
+              sgdisk --zap-all "$d" || true
+            else
+              sz=$(blockdev --getsz "$d" 2>/dev/null || echo 0)
+              dd if=/dev/zero of="$d" bs=1M count=10 conv=fsync 2>/dev/null || true
+              if [ "$sz" -gt 20480 ]; then
+                dd if=/dev/zero of="$d" bs=512 count=20480 seek=$(( sz - 20480 )) conv=fsync 2>/dev/null || true
+              fi
+            fi
+          done
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "OS-disk prep | re-read partition tables + settle udev"
+      ansible.builtin.shell:
+        cmd: "partprobe {{ _hbb_os_dev_paths | join(' ') }} 2>/dev/null || true; udevadm settle 2>/dev/null || true"
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "OS-disk prep | re-check: any array still holding an OS disk?"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_os_dev_paths | join(' ') }}; do
+            lsblk -nrpo TYPE "$d" | awk '$1 ~ /^raid/ {print}'
+          done
+        executable: /bin/bash
+      register: _hbb_md_after
+      changed_when: false
+
+    - name: "OS-disk prep | assert the OS disks are free of assembled RAID"
+      ansible.builtin.assert:
+        that:
+          - (_hbb_md_after.stdout | trim | length) == 0
+        fail_msg: >-
+          An MD array still references an OS disk after cleanup
+          ({{ _hbb_md_after.stdout_lines }}).  installimage would likely fail to
+          repartition.  Inspect the rescue: `cat /proc/mdstat`, `lsblk`.
+        success_msg: "OS disks are clean — no assembled RAID, signatures cleared."

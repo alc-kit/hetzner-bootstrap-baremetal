@@ -3,6 +3,45 @@
 All notable changes to this role are documented here. This role is consumed via
 `ansible-galaxy` from git; releases are git tags (e.g. `v1.1.0`).
 
+## [Unreleased]
+
+### Changed
+- **Image selection is now intent-based and resolved from the rescue, with no
+  silent fallback.** `hetzner_bootstrap_image` now defaults to `""`; when empty,
+  new `resolve-image.yml` resolves the concrete tarball IN-RESCUE (the only
+  authoritative source — Hetzner exposes no API for installimage filenames) from
+  `hetzner_bootstrap_image_{codename,arch,variant}` (default trixie/amd64/base),
+  picking the newest `Debian-<NNNN>-<codename>-<arch>-<variant>.tar.*` and
+  **ignoring the `-latest-` symlink** (which was observed installing bookworm
+  when trixie was intended). If nothing matches — or a pinned image is absent —
+  the role ABORTS and lists what is available; it never substitutes another
+  version. `await-installed` additionally asserts the booted release equals the
+  requested codename (`hetzner_bootstrap_verify_installed_codename`, default
+  true), so a name-matched-but-wrong-release image aborts before any downstream
+  role runs. Pin `hetzner_bootstrap_image` to an exact filename to opt out of
+  resolution. See README "Image selection".
+
+### Added
+- **Set + verify root credentials on the installed system.** installimage only
+  copies the single rescue SSH key and sets no root password, so root access
+  hung on one key with no fallback (a removed key = full lock-out). New phases
+  `set-root-credentials` and `verify-root-credentials` (gated on
+  `hetzner_bootstrap_manage_root_credentials`, default true) now ensure BOTH
+  root `authorized_keys` (`hetzner_bootstrap_root_authorized_keys`, additive or
+  `…_exclusive`) and a root password (`hetzner_bootstrap_root_password`, vaulted;
+  hashed on the target via `chpasswd`), write an sshd drop-in permitting root
+  password login (`hetzner_bootstrap_permit_root_password_login`), and then
+  PROVE each method from the controller with single-method logins (key-only,
+  then password-only via `sshpass`). See README "Root credentials".
+- **Free the OS disks of stale software RAID before installimage.** New phase
+  `prepare-os-disks` (`hetzner_bootstrap_wipe_os_disks_before_install`, default
+  true) stops any mdadm array the rescue auto-assembled on the SELECTED OS disks,
+  zeroes their mdadm superblocks, and clears fs/partition-table signatures —
+  fixing reinstalls that failed because the target disks were held open by an
+  assembled array or a new array re-absorbed a stale member. Data disks are
+  never touched (enforced by an OS/data overlap assert); guarded to run only in
+  the rescue; skipped in `--check`. See README "Reinstall hygiene (stale RAID)".
+
 ## [1.2.1] - 2026-06-05
 
 ### Fixed

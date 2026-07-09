@@ -1,7 +1,7 @@
 ---
 galaxy_info:
   role_name: hetzner_bootstrap_baremetal
-  author: kvalitetsit
+  author: KvalitetsIT
   description: >
     Provision a fresh OS onto a Hetzner dedicated (bare-metal) server.
     Drives the rescue system via the Robot API, runs Hetzner's installimage,
