@@ -105,12 +105,37 @@
       no_log: true
       become: false
 
-    - name: "Hardware reset to boot into rescue"
+    - name: "Resolve the reset type to use for this run"
+      ansible.builtin.set_fact:
+        _reset_type: >-
+          {{ hetzner_bootstrap_reset_type_when_down
+             if ((not _host_responds | bool)
+                 and (hetzner_bootstrap_reset_type_when_down | default('') | length > 0))
+             else hetzner_bootstrap_reset_type }}
+
+    - name: "Warn that a RESTART press does nothing on a powered-off server"
+      # Costs one line of output and saves a silent
+      # hetzner_bootstrap_rescue_wait_seconds-long wait that changes nothing.
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} did not answer SSH before the reset and reset_type is
+          '{{ _reset_type }}'. 'hardware' presses the RESTART button, which is a NO-OP on a
+          server that is powered OFF: the wait below would then time out after
+          {{ hetzner_bootstrap_rescue_wait_seconds }}s having changed nothing. If this
+          server is powered off, interrupt now and either power it on in Robot or re-run
+          with -e hetzner_bootstrap_reset_type_when_down=power. ('power' presses the POWER
+          button — it switches an OFF server ON, but on a RUNNING server it triggers a
+          graceful SHUTDOWN, which is why the role will not choose it for you.)
+      when:
+        - not _host_responds | bool
+        - _reset_type == 'hardware'
+
+    - name: "Reset the server to boot into rescue (type: {{ _reset_type }})"
       community.hrobot.reset:
         hetzner_user: "{{ hetzner_robot_user }}"
         hetzner_password: "{{ hetzner_robot_password }}"
         server_number: "{{ hetzner_server_number }}"
-        reset_type: "{{ hetzner_bootstrap_reset_type }}"
+        reset_type: "{{ _reset_type }}"
       delegate_to: localhost
       no_log: true
       become: false
@@ -126,11 +151,36 @@
       delegate_to: localhost
       become: false
 
-    - name: "Wait for rescue SSH to respond"
-      ansible.builtin.wait_for_connection:
-        delay: 45
-        sleep: 10
-        timeout: "{{ hetzner_bootstrap_rescue_wait_seconds }}"
+    - name: "Wait for rescue SSH, and diagnose it if it never comes up"
+      block:
+        - name: "Wait for rescue SSH to respond"
+          ansible.builtin.wait_for_connection:
+            delay: 45
+            sleep: 10
+            timeout: "{{ hetzner_bootstrap_rescue_wait_seconds }}"
+      rescue:
+        - name: "Explain the rescue-boot timeout instead of leaving a bare ping failure"
+          ansible.builtin.fail:
+            msg: >-
+              Rescue SSH never answered on {{ ansible_host | default(inventory_hostname) }}
+              within {{ hetzner_bootstrap_rescue_wait_seconds }}s after a
+              '{{ _reset_type }}' reset.
+              {% if not _host_responds | bool %}
+              The host was ALREADY not answering before the reset. If it is powered OFF,
+              '{{ _reset_type }}' was a no-op: 'hardware' presses RESTART, which does nothing
+              on an off server. Power it on in Robot, or re-run with
+              -e hetzner_bootstrap_reset_type_when_down=power.
+              {% endif %}
+              A timeout here is NOT a reason to raise
+              hetzner_bootstrap_rescue_wait_seconds — that only helps a server which is slow
+              rather than stuck. Check, in order: (1) that another server on the same public
+              path answers port 22, to rule out your own egress; (2) Robot, for whether
+              rescue is still active/UNCONSUMED — if it is, the server never booted the
+              rescue image at all, which separates 'stuck in POST' from 'booted but no
+              network'; (3) the remote console, which is the only thing that shows where a
+              dark server stopped; (4) escalate the reset type ('power', then 'manual'), and
+              open a Robot support request if it stays dark for more than ~15 minutes after
+              an accepted reset.
 
     - name: "Gather facts (rescue identifies via hostname 'rescue'; Debian-based, custom kernel)"
       ansible.builtin.setup:
