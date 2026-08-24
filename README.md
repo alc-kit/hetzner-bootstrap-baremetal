@@ -146,6 +146,7 @@ See `defaults/main.yml` for the full list, but the most useful overrides:
 | `hetzner_bootstrap_force_reinstall` | `false` | Allow reinstall of a server that is currently up |
 | `hetzner_bootstrap_wipe_os_disks_before_install` | `true` | Stop stale mdadm RAID + clear signatures on the OS disks before installimage (see [Reinstall hygiene](#reinstall-hygiene-stale-raid)) |
 | `hetzner_bootstrap_reset_type` | `hardware` | `hardware`, `power`, `manual`, `software` |
+| `hetzner_bootstrap_reset_type_when_down` | `""` (off) | Reset type to use instead, when the host was not answering SSH before the reset. Set to `power` for a server you know is powered OFF. |
 | `hetzner_bootstrap_rescue_wait_seconds` | `600` | How long to wait for rescue SSH |
 | `hetzner_bootstrap_installimage_timeout_seconds` | `1800` | Hard ceiling on installer runtime |
 | `hetzner_bootstrap_installed_wait_seconds` | `600` | How long to wait for installed SSH |
@@ -371,6 +372,23 @@ For a real fleet you would typically chain this with downstream playbooks:
 `provision-bare-metal.yml` can be a one-liner that includes this role.
 
 ## Troubleshooting
+
+**The role times out at "Wait for rescue SSH to respond"**
+First question: was the server **powered off**? Hetzner's reset types are distinct
+physical actions, not severity levels — `hardware` presses the **Restart** button,
+which does nothing at all on a powered-off server. The role warns about this before
+the wait when the host was not answering beforehand, and the failure message says so
+too. Fix: power it on in Robot, or re-run with
+`-e hetzner_bootstrap_reset_type_when_down=power`. Note `power` presses the **Power**
+button, so on a *running* server it triggers a graceful shutdown — which is why the
+role will not switch for you. The Robot API exposes no power-state query, so this
+cannot be detected automatically.
+
+A timeout is **not** a reason to raise `hetzner_bootstrap_rescue_wait_seconds`; that
+only helps a server that is slow rather than stuck. Rule out your own egress with a
+sibling server on the same public path, then check Robot for whether rescue is still
+active/unconsumed (if it is, the server never booted the rescue image), then the
+remote console.
 
 **The role fails at "sanity-check we are actually in the rescue"**
 The server probably did not actually reboot into rescue — check the Robot UI

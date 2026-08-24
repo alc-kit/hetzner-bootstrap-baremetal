@@ -178,6 +178,27 @@ hetzner_bootstrap_wipe_os_disks_before_install: true
 # Options: "hardware" (recommended), "power", "manual", "software".
 hetzner_bootstrap_reset_type: hardware
 
+# Reset type to use INSTEAD of the above when the pre-reset probe found the host not
+# answering SSH. Empty (the default) keeps the single configured type, i.e. no change in
+# behaviour.
+#
+# Why this is opt-in rather than automatic: Hetzner's reset types are distinct physical
+# actions, not severity levels. 'hardware' presses the RESTART button, which does nothing
+# at all on a server that is powered OFF — the role then waits out
+# hetzner_bootstrap_rescue_wait_seconds and fails, having changed nothing. 'power' presses
+# the POWER button, which switches an OFF server ON — but on a RUNNING server it sends an
+# ACPI signal and triggers a graceful SHUTDOWN.
+#
+# "Does not answer SSH" is NOT the same as "powered off" (it may be mid-boot, or up with
+# SSH firewalled). Switching automatically would therefore risk shutting down a live host,
+# so the operator opts in when they know the server is off:
+#
+#     -e hetzner_bootstrap_reset_type_when_down=power
+#
+# The Robot API exposes no power-state query (community.hrobot has reset_info for the
+# SUPPORTED types only), so the role cannot detect this for itself.
+hetzner_bootstrap_reset_type_when_down: ""
+
 # ----------------------------------------------------------------------------
 # Timeouts (seconds)
 # ----------------------------------------------------------------------------
