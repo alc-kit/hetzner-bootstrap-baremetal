@@ -6,6 +6,18 @@ All notable changes to this role are documented here. This role is consumed via
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: a reinstall now clears the DATA disks by default.** installimage
+  only touches `installimage_os_disks`, so every other disk used to survive with
+  the previous build's LUKS2 headers, clevis bindings, LVM/ZFS metadata and RAID
+  superblocks — and a downstream encryption role could reuse a container this
+  deployment holds no passphrase for, bound to another fleet's Tang servers.
+  New `prepare-data-disks.yml` (after the OS-disk prep, before installimage)
+  deactivates VGs, closes LUKS mappers, stops MD arrays, wipes every partition
+  and the disk, zeroes the head and tail 32 MiB, zaps the partition table, and
+  **asserts** via `blkid -p` that nothing survived. Asserts no overlap with the
+  OS disks, rescue-only, skipped in `--check` (which lists what would be
+  cleared). Opt out with `hetzner_bootstrap_wipe_data_disks_before_install:
+  false` — only for re-imaging the OS of a node whose data pool must survive.
 - **Image selection is now intent-based and resolved from the rescue, with no
   silent fallback.** `hetzner_bootstrap_image` now defaults to `""`; when empty,
   new `resolve-image.yml` resolves the concrete tarball IN-RESCUE (the only

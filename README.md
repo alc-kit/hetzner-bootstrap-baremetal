@@ -145,6 +145,7 @@ See `defaults/main.yml` for the full list, but the most useful overrides:
 | `hetzner_bootstrap_ssh_public_key_path` | `~/.ssh/id_ed25519.pub` | Local pubkey to register with Robot |
 | `hetzner_bootstrap_force_reinstall` | `false` | Allow reinstall of a server that is currently up |
 | `hetzner_bootstrap_wipe_os_disks_before_install` | `true` | Stop stale mdadm RAID + clear signatures on the OS disks before installimage (see [Reinstall hygiene](#reinstall-hygiene-stale-raid)) |
+| `hetzner_bootstrap_wipe_data_disks_before_install` | `true` | Clear the DATA disks too — LUKS headers, LVM/ZFS metadata, RAID superblocks, partition tables. installimage never touches them, so without this a reinstall inherits the previous build's encryption. Set `false` only to re-image the OS of a node whose pool must survive |
 | `hetzner_bootstrap_reset_type` | `hardware` | `hardware`, `power`, `manual`, `software` |
 | `hetzner_bootstrap_reset_type_when_down` | `""` (off) | Reset type to use instead, when the host was not answering SSH before the reset. Set to `power` for a server you know is powered OFF. |
 | `hetzner_bootstrap_rescue_wait_seconds` | `600` | How long to wait for rescue SSH |
@@ -299,6 +300,53 @@ So before installimage runs, `tasks/prepare-os-disks.yml`
 Scope is enforced by an assert that the OS-disk selection does **not** overlap
 `hetzner_bootstrap_data_disks`, and the whole file is guarded to run only in the
 rescue system. It is skipped in `--check`.
+
+### Reinstall hygiene: the DATA disks
+
+installimage only ever touches `installimage_os_disks`. Every other disk survives
+a reinstall **untouched** — still carrying the previous build's LUKS2 headers and
+clevis bindings, LVM/ZFS metadata, RAID superblocks and partition tables.
+
+For a node being provisioned from factory state that is simply wrong, and it is
+worse than untidy. A downstream encryption role that asks *"is this disk
+LUKS-formatted and Tang-bound?"* gets **yes**, and reuses a container whose
+passphrase this deployment does not hold, bound to whatever Tang servers the
+previous fleet used.
+
+That is measured, not hypothetical. A node moved from a test fleet to a
+production fleet was reinstalled: installimage rebuilt the OS mirror, the data
+disks kept their LUKS2 containers, and the encryption role assessed them as
+provisioned and reused them. The bindings named the **test** fleet's Tang
+servers and the passphrase was the old node's recovery key. The node would not have unlocked unattended, and the fault
+surfaced two layers away as *"could not resolve a fault domain"*.
+
+So `tasks/prepare-data-disks.yml`
+(`hetzner_bootstrap_wipe_data_disks_before_install`, default `true`) runs
+immediately after the OS-disk prep and, for `hetzner_bootstrap_data_disks` only:
+
+1. Deactivates any VG backed by those disks, then closes any LUKS mapper holding
+   them (outermost layer first — a VG on an open mapper holds the mapper open).
+2. `mdadm --stop`s their arrays and `--zero-superblock`s each disk + partition.
+3. `wipefs -a` and a 32 MiB zero on every partition (deepest first), then
+   `wipefs -a` on the disk.
+4. Zeroes the first **and** last **32 MiB** of each disk. `wipefs` clears the
+   magic, not the LUKS2 header (16 MiB at the head); ZFS labels L2/L3 and an
+   mdadm 1.0 superblock live at the tail.
+5. GPT/MBR zap, `partprobe`, `udevadm settle`.
+6. Probes each disk with `blkid -p` and **asserts** no LUKS header, no assembled
+   RAID, no partition and no filesystem or partition-table signature remains.
+
+Same guarantees as the OS half: an assert that the data selection does **not**
+overlap `installimage_os_disks`, rescue-only, skipped in `--check`. A host with
+no data disks logs that and does nothing. `--check` prints the disks a real run
+would clear.
+
+**This is destructive by default.** Any run that reaches installimage (a host
+that is down, or `hetzner_bootstrap_force_reinstall: true`) destroys every
+non-OS disk's contents unless you opt out.
+
+Set it to `false` **only** to re-image the OS of a node whose existing data pool
+must survive. That is not the commissioning case.
 
 ## Root credentials
 
