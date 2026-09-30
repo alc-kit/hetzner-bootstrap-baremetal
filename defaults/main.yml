@@ -174,6 +174,26 @@ hetzner_bootstrap_force_reinstall: false
 # installimage_os_disks are touched; data disks are never referenced.
 hetzner_bootstrap_wipe_os_disks_before_install: true
 
+# Clear the DATA disks too, before installimage (tasks/prepare-data-disks.yml).
+#
+# installimage only ever touches installimage_os_disks, so on a reinstall every
+# other disk keeps the PREVIOUS build's LUKS2 headers, clevis bindings, LVM/ZFS
+# metadata and RAID superblocks.  A node provisioned from factory state has no
+# such content worth keeping, and leaving it is actively dangerous: a downstream
+# encryption role that asks "is this disk LUKS-formatted and Tang-bound?" gets
+# "yes" and reuses a container this deployment holds no passphrase for, bound to
+# whatever Tang servers the PREVIOUS fleet used.  That has happened (a node
+# moved from a test fleet to a production fleet) and cost an afternoon; the
+# symptom surfaced two layers away as a fault-domain resolution error.
+#
+# Only hetzner_bootstrap_data_disks are touched — every disk MINUS
+# installimage_os_disks, as computed by discover-disks.yml — and an explicit
+# assert enforces no overlap with the OS selection.
+#
+# Set false ONLY to re-image the OS of a node whose existing data pool must
+# survive.  That is not the commissioning case.
+hetzner_bootstrap_wipe_data_disks_before_install: true
+
 # Reset type sent to the Robot API to reboot into rescue.
 # Options: "hardware" (recommended), "power", "manual", "software".
 hetzner_bootstrap_reset_type: hardware

@@ -1,0 +1,271 @@
+---
+# Reinstall hygiene — clear the DATA disks before installimage runs.
+#
+# installimage only ever touches installimage_os_disks.  Everything else on the
+# machine survives a reinstall untouched, which is wrong for a node being
+# provisioned from factory state: the data disks still carry the PREVIOUS
+# build's LUKS2 headers, clevis bindings, LVM/ZFS metadata and RAID
+# superblocks.
+#
+# That is not hypothetical.  A node moved from a test fleet to a production
+# fleet was reinstalled: installimage rebuilt the OS mirror, the data disks
+# kept their LUKS2 containers, and the encryption role's assessment reported
+# them "LUKS2-formatted and Tang-bound" — so it reused them.  The bindings
+# named the TEST fleet's Tang servers and the passphrase was the old node's
+# recovery key, which the new fleet does not hold.  The node would not have
+# unlocked unattended, and the failure surfaced two layers away as "could not
+# resolve a fault domain".  Clearing the data disks here removes the whole
+# class.
+#
+# Scope guarantees, mirroring prepare-os-disks.yml:
+#   * Only hetzner_bootstrap_data_disks are touched — the set discover-disks.yml
+#     computed as "every disk MINUS installimage_os_disks".  An explicit assert
+#     enforces no overlap with the OS selection.
+#   * Gated on hetzner_bootstrap_wipe_data_disks_before_install and, like the
+#     installimage wipe itself, skipped in --check.
+#   * Runs in the rescue only.
+#
+# Set hetzner_bootstrap_wipe_data_disks_before_install=false to keep the data
+# disks — e.g. deliberately re-imaging the OS of a node whose pool must survive.
+# That is the ONLY case for it, and it is not the commissioning case.
+
+- name: "Data-disk prep | guard — must be running in the rescue system"
+  ansible.builtin.assert:
+    that:
+      - "'rescue' in (ansible_facts.kernel | default('') | lower)
+         or (ansible_facts.hostname | default('') | lower == 'rescue')
+         or (ansible_facts.nodename | default('') | lower == 'rescue')"
+    fail_msg: >-
+      Refusing to wipe data disks: this host does not look like the Hetzner rescue
+      (kernel={{ ansible_facts.kernel | default('?') }},
+      hostname={{ ansible_facts.hostname | default('?') }}).
+
+- name: "Data-disk prep | build the target device path list"
+  ansible.builtin.set_fact:
+    _hbb_data_dev_paths: >-
+      {{ (hetzner_bootstrap_data_disks | default([]))
+         | map('regex_replace', '^', '/dev/') | list }}
+
+- name: "Data-disk prep | nothing to do (this host has no data disks)"
+  ansible.builtin.debug:
+    msg: "No data disks on this host — every disk is in installimage_os_disks."
+  when: _hbb_data_dev_paths | length == 0
+
+- name: "Data-disk prep | SAFETY — data selection must not overlap the OS disks"
+  # The mirror of prepare-os-disks.yml's assert.  Wiping an OS disk here
+  # would destroy the system installimage is about to build on.
+  ansible.builtin.assert:
+    that:
+      - installimage_os_disks | length > 0
+      - ((hetzner_bootstrap_data_disks | default([]))
+         | intersect(installimage_os_disks)) | length == 0
+    fail_msg: >-
+      Data/OS disk selection overlaps
+      (data={{ hetzner_bootstrap_data_disks | default([]) }},
+      os={{ installimage_os_disks }})
+      — aborting before any destructive operation.
+
+- name: "Data-disk prep | what is about to be cleared"
+  # Outside the block on purpose: --check must show which disks a real run
+  # would destroy, since destroying them is the default.
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Would clear' if ansible_check_mode else 'Clearing' }}
+      {{ _hbb_data_dev_paths | length }} data disk(s):
+      {{ _hbb_data_dev_paths | join(' ') }}.
+      Set hetzner_bootstrap_wipe_data_disks_before_install=false to keep them.
+  when: _hbb_data_dev_paths | length > 0
+
+- name: "Data-disk prep | clear the data disks"
+  when:
+    - _hbb_data_dev_paths | length > 0
+    - not ansible_check_mode
+  block:
+
+    # ── tear down anything holding the disks open, outermost layer first ──────
+    - name: "Data-disk prep | deactivate volume groups backed by the data disks"
+      # A VG sitting on an open LUKS mapper holds the mapper open, which holds
+      # the disk open.  Deactivate before closing anything below it.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            for holder in $(lsblk -nrpo NAME "$d" | tail -n +2); do
+              vg=$(pvs --noheadings -o vg_name "$holder" 2>/dev/null | tr -d ' ' || true)
+              [ -n "$vg" ] && vgchange -an "$vg" 2>/dev/null || true
+            done
+          done
+          true
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "Data-disk prep | close any LUKS mappers backed by the data disks"
+      # The case that motivated this file: previous-build containers, whose
+      # passphrase this deployment does not hold, cannot simply be reused.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            for holder in $(lsblk -nrpo NAME,TYPE "$d" | awk '$2=="crypt" {print $1}'); do
+              cryptsetup close "$holder" 2>/dev/null || true
+            done
+          done
+          true
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "Data-disk prep | record where each partition starts (for the re-check)"
+      # Once the partition table is zapped, a header inside an old partition is
+      # invisible to any disk-level probe.  Recording "<disk> <byte offset>" now
+      # lets the re-check probe those exact offsets afterwards.  Read-only.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            for p in $(lsblk -nrpo NAME,TYPE "$d" | awk '$2=="part" {print $1}'); do
+              echo "$d $(( $(cat "/sys/class/block/${p##*/}/start") * 512 ))"
+            done
+          done
+        executable: /bin/bash
+      register: _hbb_data_part_offsets
+      changed_when: false
+
+    - name: "Data-disk prep | find MD arrays backed by the data disks"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            lsblk -nrpo NAME,TYPE "$d" | awk '$2 ~ /^raid/ {print $1}'
+          done | sort -u
+        executable: /bin/bash
+      register: _hbb_data_md
+      changed_when: false
+
+    - name: "Data-disk prep | stop the MD arrays backed by the data disks"
+      ansible.builtin.command: "mdadm --stop {{ item }}"
+      loop: "{{ _hbb_data_md.stdout_lines | default([]) }}"
+      register: _hbb_data_mdstop
+      changed_when: _hbb_data_mdstop.rc == 0
+      failed_when:
+        - _hbb_data_mdstop.rc != 0
+        - "'does not exist' not in (_hbb_data_mdstop.stderr | default(''))"
+        - "'No such' not in (_hbb_data_mdstop.stderr | default(''))"
+
+    - name: "Data-disk prep | zero mdadm superblocks on the data disks + partitions"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            for dev in "$d" $(lsblk -nrpo NAME "$d" | tail -n +2); do
+              mdadm --zero-superblock "$dev" 2>/dev/null || true
+            done
+          done
+          true
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "Data-disk prep | wipe fs/LUKS/RAID signatures on every partition, then the disk"
+      # Partitions first, while the partition table still says where they are:
+      # a LUKS header or ZFS label at the start of a partition lies beyond the
+      # disk-head zeroing below and would survive the GPT zap.  wipefs only
+      # clears the magic, so each partition's first 32 MiB is zeroed as well —
+      # the header goes, not just its signature.  tac = deepest first.
+      # No || true: a signature that cannot be removed must fail here.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            for p in $(lsblk -nrpo NAME,TYPE "$d" | awk '$2=="part" {print $1}' | tac); do
+              wipefs -a "$p"
+              mib=$(( $(blockdev --getsize64 "$p") / 1048576 ))
+              dd if=/dev/zero of="$p" bs=1M count=$(( mib < 32 ? mib : 32 )) conv=fsync status=none
+            done
+            wipefs -a "$d"
+          done
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "Data-disk prep | zero the head AND tail of each data disk"
+      # wipefs clears the magic, not the header.  32 MiB at the head removes
+      # the LUKS2 header (16 MiB) and its binary backup outright; 32 MiB at the
+      # tail removes ZFS labels L2/L3 and an mdadm 1.0 superblock, which live
+      # at the END of the device.  Nothing downstream can then mistake a stale
+      # container, pool or array for a live one.
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            mib=$(( $(blockdev --getsize64 "$d") / 1048576 ))
+            n=$(( mib < 32 ? mib : 32 ))
+            dd if=/dev/zero of="$d" bs=1M count="$n" conv=fsync status=none
+            dd if=/dev/zero of="$d" bs=1M count="$n" seek=$(( mib - n )) conv=fsync status=none
+          done
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "Data-disk prep | zap GPT/MBR on the data disks"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            if command -v sgdisk >/dev/null 2>&1; then
+              sgdisk --zap-all "$d" || true
+            else
+              sz=$(blockdev --getsz "$d" 2>/dev/null || echo 0)
+              dd if=/dev/zero of="$d" bs=1M count=10 conv=fsync 2>/dev/null || true
+              if [ "$sz" -gt 20480 ]; then
+                dd if=/dev/zero of="$d" bs=512 count=20480 seek=$(( sz - 20480 )) conv=fsync 2>/dev/null || true
+              fi
+            fi
+          done
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "Data-disk prep | re-read partition tables + settle udev"
+      ansible.builtin.shell:
+        cmd: "partprobe {{ _hbb_data_dev_paths | join(' ') }} 2>/dev/null || true; udevadm settle 2>/dev/null || true"
+        executable: /bin/bash
+      changed_when: false
+
+    # ── prove the end state, rather than trusting the commands above ──────────
+    - name: "Data-disk prep | re-check: LUKS header, RAID or fs signature left?"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          # blkid -p probes the device itself; lsblk's FSTYPE comes from the
+          # udev database and can be stale right after a wipe.
+          for d in {{ _hbb_data_dev_paths | join(' ') }}; do
+            if cryptsetup isLuks "$d" 2>/dev/null; then echo "LUKS $d"; fi
+            lsblk -nrpo NAME,TYPE "$d" | awk '$2 ~ /^raid/ {print "RAID " $1}'
+            lsblk -nrpo NAME,TYPE "$d" | awk '$2=="part" {print "PART " $1}'
+            sig=$(blkid -p -o value -s TYPE "$d" 2>/dev/null || true)
+            if [ -n "$sig" ]; then echo "SIGNATURE $d $sig"; fi
+            ptt=$(blkid -p -o value -s PTTYPE "$d" 2>/dev/null || true)
+            if [ -n "$ptt" ]; then echo "PARTTABLE $d $ptt"; fi
+          done
+          # Where the partitions used to start (recorded before the wipe).
+          while read -r d off; do
+            [ -n "$d" ] || continue
+            sig=$(blkid -p -O "$off" -o value -s TYPE "$d" 2>/dev/null || true)
+            if [ -n "$sig" ]; then echo "SIGNATURE $d@$off $sig"; fi
+          done <<'OFFSETS'
+          {{ _hbb_data_part_offsets.stdout }}
+          OFFSETS
+          true
+        executable: /bin/bash
+      register: _hbb_data_after
+      changed_when: false
+
+    - name: "Data-disk prep | assert the data disks carry no stale metadata"
+      ansible.builtin.assert:
+        that:
+          - (_hbb_data_after.stdout | trim | length) == 0
+        fail_msg: >-
+          Stale metadata survived the data-disk wipe
+          ({{ _hbb_data_after.stdout_lines }}).  A previous build's LUKS header,
+          RAID superblock, partition or filesystem is still present and the encryption role
+          downstream may reuse it.  Inspect the rescue: `lsblk -f`,
+          `cryptsetup isLuks <dev>`, `cat /proc/mdstat`.
+        success_msg: >-
+          Data disks are clean — no LUKS header, no assembled RAID, no partition,
+          no filesystem or partition-table signature on {{ _hbb_data_dev_paths | join(' ') }}.

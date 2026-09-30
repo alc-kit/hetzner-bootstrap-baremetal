@@ -12,6 +12,8 @@
 #   5. discover-disks      enumerate disks in rescue, validate selection
 #   6. validate-rescue     fail-fast: image exists in rescue, UEFI/ESP sane
 #   7. prepare-os-disks    stop stale RAID + wipe signatures on the OS disks
+#   7b. prepare-data-disks clear the DATA disks (LUKS/LVM/ZFS/RAID) — default ON,
+#                          opt out with hetzner_bootstrap_wipe_data_disks_before_install=false
 #   8. installimage        render config, run installer, reboot
 #   9. await-installed     re-fingerprint, wait for installed SSH, assert release
 #  10. set-root-credentials  authorised_keys + root password on the new system
@@ -51,6 +53,11 @@
 - name: "Free the OS disks of stale software RAID before installimage"
   ansible.builtin.import_tasks: prepare-os-disks.yml
   when: hetzner_bootstrap_wipe_os_disks_before_install | bool
+  tags: [hetzner_bootstrap, disks, wipe]
+
+- name: "Clear the DATA disks before installimage (installimage never touches them)"
+  ansible.builtin.import_tasks: prepare-data-disks.yml
+  when: hetzner_bootstrap_wipe_data_disks_before_install | bool
   tags: [hetzner_bootstrap, disks, wipe]
 
 - name: "Run installimage"

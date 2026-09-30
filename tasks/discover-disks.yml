@@ -3,6 +3,8 @@
 # Disks not listed in installimage_os_disks are computed into
 # hetzner_bootstrap_data_disks and exposed as a fact so downstream playbooks
 # (e.g., a data-pool creation role) can consume the same selection.
+# Unless hetzner_bootstrap_wipe_data_disks_before_install is false, the data
+# disks are CLEARED before installimage (prepare-data-disks.yml).
 
 - name: "Enumerate block devices"
   # WWN is captured so OS-disk serials can also be matched by WWN — some
@@ -103,7 +105,7 @@
   when: ('/dev/' ~ item) not in (hetzner_bootstrap_all_disks | map(attribute='name') | list)
   loop: "{{ installimage_os_disks }}"
 
-- name: "Compute data disks (unselected = preserved for downstream roles)"
+- name: "Compute data disks (every disk not selected for the OS)"
   ansible.builtin.set_fact:
     hetzner_bootstrap_data_disks: >-
       {{ hetzner_bootstrap_all_disks
@@ -116,4 +118,9 @@
   ansible.builtin.debug:
     msg: |
       OS disks (will be wiped by installimage):  {{ installimage_os_disks }}
-      Data disks (left pristine for downstream): {{ hetzner_bootstrap_data_disks }}
+      Data disks ({{ _hbb_data_fate }}): {{ hetzner_bootstrap_data_disks }}
+  vars:
+    _hbb_data_fate: >-
+      {{ 'will be CLEARED before installimage'
+         if (hetzner_bootstrap_wipe_data_disks_before_install | bool)
+         else 'left untouched' }}
